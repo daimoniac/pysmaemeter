@@ -18,13 +18,23 @@ it is based on `emeter.py` from the deprecated homeassistant emulator found on h
 ### Running the Emulator
 
 Run the packet sender:
-    ```bash
-    python3 send_packet.py
-    ```
+```bash
+python3 send_packet.py
+```
 
-   This will send a single emulated packet to the multicast address `239.12.255.254:9522`.
+This will send a single emulated packet to the multicast address `239.12.255.254:9522`.
 
-### Testing
+## Testing
+
+### unit test
+
+To run the tests, execute the following command in your terminal:
+
+```bash
+python3 tests/test_emeter.py
+```
+
+### integration test
 
 You can use https://github.com/datenschuft/SMA-EM to capture and interpret the package.
 

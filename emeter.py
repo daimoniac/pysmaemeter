@@ -1,3 +1,5 @@
+from typing import Optional
+
 class emeterPacket:
     # SMA measurement and counter IDs (from SMA protocol documentation)
     SMA_POSITIVE_ACTIVE_POWER = 0x00010400
@@ -63,19 +65,19 @@ class emeterPacket:
     INITIAL_PAYLOAD_LENGTH = 12
     METER_PACKET_SIZE = 1000
 
-    def __init__(self, serNo=0):
+    def __init__(self, serNo: int = 0) -> None:
         """
         Initialize a new emeterPacket instance.
 
         Args:
             serNo (int): Serial number of the emulated meter.
         """
-        self.meterPacket = bytearray(self.METER_PACKET_SIZE)
+        self.meterPacket: bytearray = bytearray(self.METER_PACKET_SIZE)
         self.initEmeterPacket(serNo)
         self.begin(0)
         self.end()
 
-    def init(self, serNo):
+    def init(self, serNo: int) -> None:
         """
         Re-initialize the packet with a new serial number.
 
@@ -84,7 +86,7 @@ class emeterPacket:
         """
         self.initEmeterPacket(serNo)
 
-    def begin(self, timeStampMs):
+    def begin(self, timeStampMs: int) -> None:
         """
         Start a new packet, resetting the payload and inserting required dummy values.
 
@@ -160,7 +162,7 @@ class emeterPacket:
         self.addMeasurementValue(emeterPacket.SMA_VOLTAGE_L3, 0)
         self.addMeasurementValue(emeterPacket.SMA_POWER_FACTOR_L3, 0)
 
-    def addMeasurementValue(self, id, value):
+    def addMeasurementValue(self, id: int, value: int) -> None:
         """
         Add a 32-bit measurement value to the packet.
 
@@ -172,7 +174,7 @@ class emeterPacket:
         self._pPacketPos = self.storeU32BE(self._pPacketPos, value)
         self._length += 8
 
-    def addCounterValue(self, id, value):
+    def addCounterValue(self, id: int, value: int) -> None:
         """
         Add a 64-bit counter value to the packet.
 
@@ -184,7 +186,7 @@ class emeterPacket:
         self._pPacketPos = self.storeU64BE(self._pPacketPos, value)
         self._length += 12
 
-    def end(self):
+    def end(self) -> int:
         """
         Finalize the packet by appending version and size fields.
 
@@ -202,7 +204,7 @@ class emeterPacket:
         self._length = self._headerLength + self._length - self.INITIAL_PAYLOAD_LENGTH
         return self._length
 
-    def getData(self):
+    def getData(self) -> bytearray:
         """
         Get the raw packet data.
 
@@ -211,7 +213,7 @@ class emeterPacket:
         """
         return self.meterPacket
 
-    def getLength(self):
+    def getLength(self) -> int:
         """
         Get the current packet length.
 
@@ -220,7 +222,7 @@ class emeterPacket:
         """
         return self._length
 
-    def storeU16BE(self, pPos, value):
+    def storeU16BE(self, pPos: int, value: int) -> int:
         """
         Store a 16-bit unsigned integer in big-endian format.
 
@@ -235,7 +237,7 @@ class emeterPacket:
         self.meterPacket[pPos + 1] = value & 0xFF
         return pPos + 2
 
-    def storeU32BE(self, pPos, value):
+    def storeU32BE(self, pPos: int, value: int) -> int:
         """
         Store a 32-bit unsigned integer in big-endian format.
 
@@ -249,7 +251,7 @@ class emeterPacket:
         pPos = self.storeU16BE(pPos, (value >> 16) & 0xFFFF)
         return self.storeU16BE(pPos, value & 0xFFFF)
 
-    def storeU64BE(self, pPos, value):
+    def storeU64BE(self, pPos: int, value: int) -> int:
         """
         Store a 64-bit unsigned integer in big-endian format.
 
@@ -263,7 +265,7 @@ class emeterPacket:
         pPos = self.storeU32BE(pPos, (value >> 32) & 0xFFFFFFFF)
         return self.storeU32BE(pPos, value & 0xFFFFFFFF)
 
-    def offsetOf(self, pData, identifier, size):
+    def offsetOf(self, pData: bytearray, identifier: int, size: int) -> Optional[int]:
         """
         Find the offset of a given identifier byte in the packet header.
 
@@ -280,7 +282,7 @@ class emeterPacket:
                 return i
         return None
 
-    def initEmeterPacket(self, serNo):
+    def initEmeterPacket(self, serNo: int) -> None:
         """
         Initialize the packet header and set the serial number.
 
