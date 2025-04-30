@@ -11,36 +11,61 @@ DEFAULT_ACTIVE_POWER: int = 1234
 DEFAULT_ACTIVE_ENERGY: int = 567890
 DEFAULT_TTL: int = 32
 
+
 def main() -> None:
-    parser: argparse.ArgumentParser = argparse.ArgumentParser(description="Send a virtual emeter packet via UDP multicast.")
-    parser.add_argument('--serial', type=int, default=DEFAULT_SERIAL_NUMBER, help='Serial number for the emeter device')
-    parser.add_argument('--address', type=str, default=DEFAULT_UDP_ADDRESS, help='UDP multicast address')
-    parser.add_argument('--port', type=int, default=DEFAULT_UDP_PORT, help='UDP port')
-    parser.add_argument('--power', type=int, default=DEFAULT_ACTIVE_POWER, help='Positive active power in watts')
-    parser.add_argument('--energy', type=int, default=DEFAULT_ACTIVE_ENERGY, help='Positive active energy in watt-hours')
-    parser.add_argument('--ttl', type=int, default=DEFAULT_TTL, help='Time-to-live for multicast packets')
+    parser = argparse.ArgumentParser(
+        description="Send a virtual emeter packet via UDP multicast."
+    )
+    parser.add_argument(
+        '--serial', type=int, default=DEFAULT_SERIAL_NUMBER,
+        help='Serial number for the emeter device'
+    )
+    parser.add_argument(
+        '--address', type=str, default=DEFAULT_UDP_ADDRESS,
+        help='UDP multicast address'
+    )
+    parser.add_argument(
+        '--port', type=int, default=DEFAULT_UDP_PORT,
+        help='UDP port'
+    )
+    parser.add_argument(
+        '--power', type=int, default=DEFAULT_ACTIVE_POWER,
+        help='Positive active power in watts'
+    )
+    parser.add_argument(
+        '--energy', type=int, default=DEFAULT_ACTIVE_ENERGY,
+        help='Positive active energy in watt-hours'
+    )
+    parser.add_argument(
+        '--ttl', type=int, default=DEFAULT_TTL,
+        help='Time-to-live for multicast packets'
+    )
     args = parser.parse_args()
 
     # Create a new emeter packet with the given serial number
-    packet: emeterPacket = emeterPacket(args.serial)
+    packet = emeterPacket(args.serial)
 
     # Start the packet with the current timestamp in milliseconds
     packet.begin(int(time.time() * 1000))
 
     # Add a measurement value (e.g., positive active power in watts)
-    packet.addMeasurementValue(emeterPacket.SMA_POSITIVE_ACTIVE_POWER, args.power)
+    packet.addMeasurementValue(
+        emeterPacket.SMA_POSITIVE_ACTIVE_POWER, args.power
+    )
 
     # Add a counter value (e.g., positive active energy in watt-hours)
-    packet.addCounterValue(emeterPacket.SMA_POSITIVE_ACTIVE_ENERGY, args.energy)
+    packet.addCounterValue(
+        emeterPacket.SMA_POSITIVE_ACTIVE_ENERGY, args.energy
+    )
 
     # Finalize the packet
     packet.end()
 
     # Retrieve the raw packet data
-    data: bytearray = packet.getData()[:packet.getLength()]
+    data = packet.getData()[:packet.getLength()]
 
     # Create a UDP socket for sending the packet
-    sock: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
 
     # Set the time-to-live for multicast packets
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, args.ttl)
@@ -48,6 +73,7 @@ def main() -> None:
     # Send the packet data to the multicast address and port
     sock.sendto(data, (args.address, args.port))
     print(f"Sent {len(data)} bytes to {args.address}:{args.port}")
+
 
 if __name__ == "__main__":
     main()
