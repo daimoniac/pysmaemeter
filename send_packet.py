@@ -50,8 +50,9 @@ def main() -> None:
     )
 
     # Add a counter value (e.g., positive active energy in watt-hours)
+    # Note: The energy value is multiplied by 3600 to convert from watt-hours to joules
     packet.addCounterValue(
-        emeterPacket.SMA_POSITIVE_ACTIVE_ENERGY, args.energy
+        emeterPacket.SMA_POSITIVE_ACTIVE_ENERGY, args.energy*3600
     )
 
     # Finalize the packet
