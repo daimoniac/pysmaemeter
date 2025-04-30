@@ -172,6 +172,7 @@ pconsumeunit: value:W
 pconsumecounter: value:0.15774722222222223
 pconsumecounterunit: value:kWh
 speedwire-version: value:1.2.4.R|010204
+```
 
 ### Customization
 
