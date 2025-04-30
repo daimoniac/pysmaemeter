@@ -24,6 +24,21 @@ python3 send_packet.py
 
 This will send a single emulated packet to the multicast address `239.12.255.254:9522`.
 
+### Command-line Arguments
+
+You can customize the packet by passing the following arguments:
+
+- `--serial`: Serial number for the emeter device (default: `12345678`)
+- `--address`: UDP multicast address (default: `239.12.255.254`)
+- `--port`: UDP port (default: `9522`)
+- `--power`: Positive active power in watts (default: `1234`)
+- `--energy`: Positive active energy in watt-hours (default: `567890`)
+
+**Example:**
+```bash
+python3 send_packet.py --serial 98765432 --power 2500 --energy 123456
+```
+
 ## Testing
 
 ### unit test
@@ -157,7 +172,6 @@ pconsumeunit: value:W
 pconsumecounter: value:0.15774722222222223
 pconsumecounterunit: value:kWh
 speedwire-version: value:1.2.4.R|010204
-```
 
 ### Customization
 
