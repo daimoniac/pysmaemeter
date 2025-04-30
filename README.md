@@ -17,13 +17,7 @@ it is based on `emeter.py` from the deprecated homeassistant emulator found on h
 
 ### Running the Emulator
 
-1. Clone the repository:
-    ```bash
-    git clone https://github.com/daimoniac/SMA-Energy-Meter-emulator.git
-    cd SMA-Energy-Meter-emulator
-    ```
-
-2. Run the packet sender:
+Run the packet sender:
     ```bash
     python3 send_packet.py
     ```
