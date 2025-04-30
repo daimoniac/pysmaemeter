@@ -11,7 +11,6 @@ DEFAULT_ACTIVE_POWER: int = 1234
 DEFAULT_ACTIVE_ENERGY: int = 567890
 DEFAULT_TTL: int = 32
 
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Send a virtual emeter packet via UDP multicast."
@@ -36,10 +35,7 @@ def main() -> None:
         '--energy', type=int, default=DEFAULT_ACTIVE_ENERGY,
         help='Positive active energy in watt-hours'
     )
-    parser.add_argument(
-        '--ttl', type=int, default=DEFAULT_TTL,
-        help='Time-to-live for multicast packets'
-    )
+
     args = parser.parse_args()
 
     # Create a new emeter packet with the given serial number
@@ -68,7 +64,7 @@ def main() -> None:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
 
     # Set the time-to-live for multicast packets
-    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, args.ttl)
+    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, DEFAULT_TTL)
 
     # Send the packet data to the multicast address and port
     sock.sendto(data, (args.address, args.port))
