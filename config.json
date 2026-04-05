@@ -1,0 +1,46 @@
+{
+  "logging": {
+    "level": "INFO",
+    "format": "%(asctime)s - %(levelname)s - %(message)s"
+  },
+  "multicast": {
+    "address": "239.12.255.254",
+    "port": 9522,
+    "ttl": 32
+  },
+  "emeter": {
+    "serial_number": 12345678,
+    "totalyieldbaseline": 107.411
+  },
+  "modbus": {
+    "base_ip": "192.168.10",
+    "port": 502,
+    "unit_id": 3,
+    "retries": 3,
+    "retry_delay": 1
+  },
+  "speedwire": {
+    "timeout": 10.0
+  },
+  "scheduler": {
+    "interval_seconds": 1
+  },
+  "devices": {
+    "191": {
+      "type": 8001,
+      "name": "Tripower Parents"
+    },
+    "196": {
+      "type": 8001,
+      "name": "Tripower Martin"
+    },
+    "189": {
+      "type": 8001,
+      "name": "Garage"
+    },
+    "192": {
+      "type": 9999,
+      "name": "Multigate"
+    }
+  }
+}

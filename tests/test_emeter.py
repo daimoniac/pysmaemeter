@@ -3,10 +3,10 @@ import time
 import sys
 import os
 
-# Add the parent directory to sys.path so emeter can be imported
+# Add the parent directory to sys.path so lib.emeter can be imported
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from emeter import emeterPacket
+from lib.emeter import emeterPacket
 
 class TestEmeterPacket(unittest.TestCase):
     def setUp(self):
