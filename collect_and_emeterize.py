@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from pymodbus.client.sync import ModbusTcpClient
-from emeter import emeterPacket
+from lib.emeter import emeterPacket
 import socket
 
 # Configure basic logging first, before any other operations
@@ -196,7 +196,7 @@ def validate_configuration() -> None:
 async def get_speedwire_data() -> Dict[str, int]:
     """Fetches Speedwire data with error handling and timeout"""
     try:
-        from speedwire_multigate_asyncio import fetch_speedwire_data
+        from lib.speedwire_multigate_asyncio import fetch_speedwire_data
         data = await asyncio.wait_for(fetch_speedwire_data(), timeout=CONFIG['speedwire']['timeout'])
         return data
     except asyncio.TimeoutError:

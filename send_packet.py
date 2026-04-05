@@ -1,7 +1,7 @@
 import socket
 import time
 import argparse
-from emeter import emeterPacket
+from lib.emeter import emeterPacket
 
 # Multicast address and port (SMA default)
 DEFAULT_UDP_ADDRESS: str = '239.12.255.254'
