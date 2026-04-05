@@ -45,6 +45,8 @@ except Exception as e:
     logging.error(f"Failed to load configuration: {e}")
     sys.exit(1)
 
+TOTAL_COUNTER_PATH = Path(__file__).parent / 'total_counter.json'
+
 # Convenience reference for devices and modbus registers
 SMA_DEVICES: Dict[str, Dict[str, Any]] = CONFIG['devices']
 REGISTERS: Dict[int, List[int]] = {
@@ -61,6 +63,85 @@ SCALING_FACTORS = {
 logging_config = CONFIG.get('logging', {})
 if logging_config:
     logging.getLogger().setLevel(getattr(logging, logging_config.get('level', 'INFO'), logging.INFO))
+
+
+def _current_date() -> str:
+    """Returns the local date string in YYYY-MM-DD format."""
+    return time.strftime('%Y-%m-%d', time.localtime())
+
+
+def _parse_non_negative_int(value: Any, name: str) -> int:
+    """Converts a value to non-negative int or raises ValueError."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a number")
+    if parsed < 0:
+        raise ValueError(f"{name} must be >= 0")
+    return parsed
+
+
+def load_total_counter_state() -> Dict[str, Any]:
+    """Loads persisted total counter state from disk with safe defaults."""
+    default_state = {
+        'date': _current_date(),
+        'day_max_wh': 0,
+        'accumulated_wh': 0
+    }
+
+    if not TOTAL_COUNTER_PATH.exists():
+        return default_state
+
+    try:
+        with open(TOTAL_COUNTER_PATH, 'r') as f:
+            raw = json.load(f)
+
+        state = {
+            'date': str(raw.get('date', default_state['date'])),
+            'day_max_wh': _parse_non_negative_int(raw.get('day_max_wh', 0), 'day_max_wh'),
+            'accumulated_wh': _parse_non_negative_int(raw.get('accumulated_wh', 0), 'accumulated_wh')
+        }
+        return state
+    except Exception as e:
+        logging.warning(f"Invalid total counter state file {TOTAL_COUNTER_PATH}: {e}. Resetting state.")
+        return default_state
+
+
+def save_total_counter_state(state: Dict[str, Any]) -> None:
+    """Saves total counter state atomically to avoid partial writes."""
+    tmp_path = TOTAL_COUNTER_PATH.with_suffix('.json.tmp')
+    serialized = {
+        'date': str(state['date']),
+        'day_max_wh': _parse_non_negative_int(state['day_max_wh'], 'day_max_wh'),
+        'accumulated_wh': _parse_non_negative_int(state['accumulated_wh'], 'accumulated_wh')
+    }
+
+    with open(tmp_path, 'w') as f:
+        json.dump(serialized, f, indent=2)
+        f.write('\n')
+
+    tmp_path.replace(TOTAL_COUNTER_PATH)
+
+
+def load_total_yield_baseline_wh() -> int:
+    """Loads baseline total yield from config key emeter.totalyieldbaseline (kWh)."""
+    emeter_config = CONFIG.get('emeter')
+    if not isinstance(emeter_config, dict):
+        raise ValueError("Missing emeter configuration")
+
+    if 'totalyieldbaseline' not in emeter_config:
+        raise ValueError("Missing config key emeter.totalyieldbaseline")
+
+    try:
+        baseline_kwh = float(emeter_config['totalyieldbaseline'])
+    except (TypeError, ValueError):
+        raise ValueError("Config key emeter.totalyieldbaseline must be numeric")
+
+    if baseline_kwh < 0:
+        raise ValueError("Config key emeter.totalyieldbaseline must be >= 0")
+
+    # Config baseline is in kWh; internal logic uses Wh.
+    return int(baseline_kwh * 1000)
 
 
 def distribute_phase_values(total_value: int, p1: int, p2: int, p3: int) -> tuple[int, int, int]:
@@ -102,6 +183,12 @@ def validate_configuration() -> None:
         # Validate device type (8001 = Modbus inverter, 9999 = Speedwire)
         if device_info['type'] not in (8001, 9999):
             raise ValueError(f"Device {device_id}: unsupported device type {device_info['type']}")
+
+    emeter_config = CONFIG.get('emeter')
+    if not isinstance(emeter_config, dict):
+        raise ValueError("Configuration: 'emeter' section missing or invalid")
+    if 'totalyieldbaseline' not in emeter_config:
+        raise ValueError("Configuration: missing emeter.totalyieldbaseline (kWh)")
     
     logging.info(f"Configuration validated: {len(SMA_DEVICES)} devices configured")
 
@@ -324,7 +411,8 @@ def add_phase_measurements(packet: emeterPacket, phase_suffix: str, power: int, 
 
 
 def send_emeter_packet(power: int, energy: int, p1_power: int = 0, p1_yield: int = 0,
-                       p2_power: int = 0, p2_yield: int = 0, p3_power: int = 0, p3_yield: int = 0) -> None:
+                       p2_power: int = 0, p2_yield: int = 0, p3_power: int = 0, p3_yield: int = 0,
+                       total_negative_active_energy: Optional[float] = None) -> None:
     """Sends an emeterPacket with the given power (W) and energy (Wh) including per-phase data.
     
     SMA convention: 
@@ -338,10 +426,20 @@ def send_emeter_packet(power: int, energy: int, p1_power: int = 0, p1_yield: int
     """
     packet = emeterPacket(CONFIG['emeter']['serial_number'])
     packet.begin(int(time.time() * 1000), skip_phase_values=True)
-    
-    # Add total values
-    add_phase_measurements(packet, '', power, energy)
-    
+
+    if total_negative_active_energy is None:
+        total_negative_active_energy = energy / 1000  # Wh fallback converted to kWh
+
+    # Add total values. Use dedicated total_negative_active_energy for SMA_NEGATIVE_ACTIVE_ENERGY.
+    # total_negative_active_energy is in kWh; multiply by 1000 to get Wh, then by 3600 to get J.
+    packet.addMeasurementValue(emeterPacket.SMA_POSITIVE_ACTIVE_POWER, 0)
+    packet.addCounterValue(emeterPacket.SMA_POSITIVE_ACTIVE_ENERGY, 0)
+    packet.addMeasurementValue(emeterPacket.SMA_NEGATIVE_ACTIVE_POWER, int(power * SCALING_FACTORS['power']))
+    packet.addCounterValue(
+        emeterPacket.SMA_NEGATIVE_ACTIVE_ENERGY,
+        int(total_negative_active_energy * 1000 * SCALING_FACTORS['energy'])
+    )
+
     # Add per-phase values
     add_phase_measurements(packet, '_L1', p1_power, p1_yield)
     add_phase_measurements(packet, '_L2', p2_power, p2_yield)
@@ -358,7 +456,12 @@ def send_emeter_packet(power: int, energy: int, p1_power: int = 0, p1_yield: int
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, CONFIG['multicast']['ttl'])
         multicast_config = CONFIG['multicast']
         sock.sendto(data, (multicast_config['address'], multicast_config['port']))
-        logging.info(f"Sent {len(data)} bytes to {multicast_config['address']}:{multicast_config['port']}: Total: {power}W/{energy}Wh | L1: {p1_power}W/{p1_yield}Wh | L2: {p2_power}W/{p2_yield}Wh | L3: {p3_power}W/{p3_yield}Wh")
+        logging.info(
+            f"Sent {len(data)} bytes to {multicast_config['address']}:{multicast_config['port']}: "
+            f"Total power: {power}W | Daily energy arg: {energy}Wh | "
+            f"SMA_NEGATIVE_ACTIVE_ENERGY total: {total_negative_active_energy}kWh | "
+            f"L1: {p1_power}W/{p1_yield}Wh | L2: {p2_power}W/{p2_yield}Wh | L3: {p3_power}W/{p3_yield}Wh"
+        )
     finally:
         sock.close()
 
@@ -371,27 +474,80 @@ def main() -> None:
     except ValueError as e:
         logging.error(f"Configuration error: {e}")
         return
+
+    try:
+        baseline_wh = load_total_yield_baseline_wh()
+    except ValueError as e:
+        logging.error(f"Configuration error: {e}")
+        return
+
+    total_counter_state = load_total_counter_state()
+    try:
+        # Ensure file exists from startup and is normalized.
+        save_total_counter_state(total_counter_state)
+    except Exception as e:
+        logging.error(f"Unable to persist initial total counter state: {e}")
+        return
     
     logging.info("Starting SMA data aggregator and virtual emeter...")
     
     # Define scheduled task that collects and sends data
     def scheduled_task() -> None:
         try:
+            nonlocal total_counter_state
+
             data_collection = collect_data()
             logging.debug(f"Data collection completed: {data_collection}")
             
             # Send the aggregated data as emeterPacket
             if 'aggregate' in data_collection:
                 agg = data_collection['aggregate']
+                current_date = _current_date()
+                current_daily_yield_wh = max(0, int(agg.get('daily_yield', 0) or 0))
+                state_changed = False
+
+                # Midnight rollover: add previous day max once and start a fresh day.
+                if total_counter_state['date'] != current_date:
+                    previous_day = total_counter_state['date']
+                    previous_day_max_wh = total_counter_state['day_max_wh']
+                    total_counter_state['accumulated_wh'] += previous_day_max_wh
+                    total_counter_state['date'] = current_date
+                    total_counter_state['day_max_wh'] = 0
+                    state_changed = True
+                    logging.info(
+                        f"Daily rollover {previous_day} -> {current_date}: "
+                        f"added {previous_day_max_wh}Wh to accumulated total "
+                        f"({total_counter_state['accumulated_wh']}Wh)"
+                    )
+
+                if current_daily_yield_wh > total_counter_state['day_max_wh']:
+                    total_counter_state['day_max_wh'] = current_daily_yield_wh
+                    state_changed = True
+
+                if state_changed:
+                    save_total_counter_state(total_counter_state)
+
+                total_emitted_yield_wh = (
+                    baseline_wh
+                    + total_counter_state['accumulated_wh']
+                    + current_daily_yield_wh
+                )
+                logging.debug(
+                    f"Total emitted yield: baseline={baseline_wh}Wh, "
+                    f"accumulated={total_counter_state['accumulated_wh']}Wh, "
+                    f"today={current_daily_yield_wh}Wh, emitted={total_emitted_yield_wh}Wh"
+                )
+
                 send_emeter_packet(
                     power=agg.get('total_power', 0),
-                    energy=agg.get('daily_yield', 0),
+                    energy=current_daily_yield_wh,
                     p1_power=agg.get('p1_power', 0),
                     p1_yield=agg.get('p1_yield', 0),
                     p2_power=agg.get('p2_power', 0),
                     p2_yield=agg.get('p2_yield', 0),
                     p3_power=agg.get('p3_power', 0),
-                    p3_yield=agg.get('p3_yield', 0)
+                    p3_yield=agg.get('p3_yield', 0),
+                    total_negative_active_energy=total_emitted_yield_wh / 1000
                 )
         except Exception as e:
             logging.error(f"Error in scheduled task: {e}")
