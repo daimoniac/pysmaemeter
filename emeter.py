@@ -57,9 +57,9 @@ class emeterPacket:
     SMA_CURRENT_L1 = 0x001F0400
     SMA_CURRENT_L2 = 0x00330400
     SMA_CURRENT_L3 = 0x00470400
-    SMA_VOLTAGE_L1 = 0x00200400
-    SMA_VOLTAGE_L2 = 0x00340400
-    SMA_VOLTAGE_L3 = 0x00480400
+    SMA_VOLTAGE_L1 = 0x00200400  # Channel 32 (0x20)
+    SMA_VOLTAGE_L2 = 0x00340400  # Channel 52 (0x34)
+    SMA_VOLTAGE_L3 = 0x00480400  # Channel 72 (0x48)
     SMA_VERSION = 0x90000000
 
     INITIAL_PAYLOAD_LENGTH = 12
@@ -86,12 +86,14 @@ class emeterPacket:
         """
         self.initEmeterPacket(serNo)
 
-    def begin(self, timeStampMs: int) -> None:
+    def begin(self, timeStampMs: int, skip_phase_values: bool = False) -> None:
         """
         Start a new packet, resetting the payload and inserting required dummy values.
 
         Args:
             timeStampMs (int): Timestamp in milliseconds.
+            skip_phase_values (bool): If True, skip adding per-phase active power/energy values
+                                     (allows caller to add them with custom values)
         """
         self._pPacketPos = self._headerLength
         self.storeU32BE(self._pMeterTime, timeStampMs)
@@ -112,10 +114,11 @@ class emeterPacket:
 
         # Per-phase (L1, L2, L3)
         # L1
-        self.addMeasurementValue(emeterPacket.SMA_POSITIVE_ACTIVE_POWER_L1, 0)
-        self.addCounterValue(emeterPacket.SMA_POSITIVE_ACTIVE_ENERGY_L1, 0)
-        self.addMeasurementValue(emeterPacket.SMA_NEGATIVE_ACTIVE_POWER_L1, 0)
-        self.addCounterValue(emeterPacket.SMA_NEGATIVE_ACTIVE_ENERGY_L1, 0)
+        if not skip_phase_values:
+            self.addMeasurementValue(emeterPacket.SMA_POSITIVE_ACTIVE_POWER_L1, 0)
+            self.addCounterValue(emeterPacket.SMA_POSITIVE_ACTIVE_ENERGY_L1, 0)
+            self.addMeasurementValue(emeterPacket.SMA_NEGATIVE_ACTIVE_POWER_L1, 0)
+            self.addCounterValue(emeterPacket.SMA_NEGATIVE_ACTIVE_ENERGY_L1, 0)
         self.addMeasurementValue(emeterPacket.SMA_POSITIVE_REACTIVE_POWER_L1, 0)
         self.addCounterValue(emeterPacket.SMA_POSITIVE_REACTIVE_ENERGY_L1, 0)
         self.addMeasurementValue(emeterPacket.SMA_NEGATIVE_REACTIVE_POWER_L1, 0)
@@ -129,10 +132,11 @@ class emeterPacket:
         self.addMeasurementValue(emeterPacket.SMA_POWER_FACTOR_L1, 0) 
 
         # L2
-        self.addMeasurementValue(emeterPacket.SMA_POSITIVE_ACTIVE_POWER_L2, 0)
-        self.addCounterValue(emeterPacket.SMA_POSITIVE_ACTIVE_ENERGY_L2, 0)
-        self.addMeasurementValue(emeterPacket.SMA_NEGATIVE_ACTIVE_POWER_L2, 0)
-        self.addCounterValue(emeterPacket.SMA_NEGATIVE_ACTIVE_ENERGY_L2, 0)
+        if not skip_phase_values:
+            self.addMeasurementValue(emeterPacket.SMA_POSITIVE_ACTIVE_POWER_L2, 0)
+            self.addCounterValue(emeterPacket.SMA_POSITIVE_ACTIVE_ENERGY_L2, 0)
+            self.addMeasurementValue(emeterPacket.SMA_NEGATIVE_ACTIVE_POWER_L2, 0)
+            self.addCounterValue(emeterPacket.SMA_NEGATIVE_ACTIVE_ENERGY_L2, 0)
         self.addMeasurementValue(emeterPacket.SMA_POSITIVE_REACTIVE_POWER_L2, 0)
         self.addCounterValue(emeterPacket.SMA_POSITIVE_REACTIVE_ENERGY_L2, 0)
         self.addMeasurementValue(emeterPacket.SMA_NEGATIVE_REACTIVE_POWER_L2, 0)
@@ -146,10 +150,11 @@ class emeterPacket:
         self.addMeasurementValue(emeterPacket.SMA_POWER_FACTOR_L2, 0)
 
         # L3
-        self.addMeasurementValue(emeterPacket.SMA_POSITIVE_ACTIVE_POWER_L3, 0)
-        self.addCounterValue(emeterPacket.SMA_POSITIVE_ACTIVE_ENERGY_L3, 0)
-        self.addMeasurementValue(emeterPacket.SMA_NEGATIVE_ACTIVE_POWER_L3, 0)
-        self.addCounterValue(emeterPacket.SMA_NEGATIVE_ACTIVE_ENERGY_L3, 0)
+        if not skip_phase_values:
+            self.addMeasurementValue(emeterPacket.SMA_POSITIVE_ACTIVE_POWER_L3, 0)
+            self.addCounterValue(emeterPacket.SMA_POSITIVE_ACTIVE_ENERGY_L3, 0)
+            self.addMeasurementValue(emeterPacket.SMA_NEGATIVE_ACTIVE_POWER_L3, 0)
+            self.addCounterValue(emeterPacket.SMA_NEGATIVE_ACTIVE_ENERGY_L3, 0)
         self.addMeasurementValue(emeterPacket.SMA_POSITIVE_REACTIVE_POWER_L3, 0)
         self.addCounterValue(emeterPacket.SMA_POSITIVE_REACTIVE_ENERGY_L3, 0)
         self.addMeasurementValue(emeterPacket.SMA_NEGATIVE_REACTIVE_POWER_L3, 0)

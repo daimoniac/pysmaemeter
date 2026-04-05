@@ -9,6 +9,48 @@ it is based on `emeter.py` from the deprecated homeassistant emulator found on h
 - Sends packets to the standard SMA multicast address and port.
 - Easily extensible for additional measurements or custom logic.
 
+## Installation
+
+### Prerequisites
+
+- Python 3.6 or newer
+- pip (Python package installer)
+
+### Install Dependencies
+
+Clone the repository and install the required dependencies:
+
+```bash
+git clone https://github.com/daimoniac/pysmaemeter.git
+cd pysmaemeter
+```
+
+#### Using a Virtual Environment (Recommended)
+
+It's recommended to use a Python virtual environment to isolate project dependencies:
+
+```bash
+# Create a virtual environment
+python3 -m venv venv
+
+# Activate the virtual environment
+# On Linux/macOS:
+source venv/bin/activate
+# On Windows:
+# venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+#### Global Installation
+
+Alternatively, you can install dependencies globally (not recommended):
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Usage
 
 ### Prerequisites
@@ -38,6 +80,33 @@ You can customize the packet by passing the following arguments:
 ```bash
 python3 send_packet.py --serial 98765432 --power 2500 --energy 123456
 ```
+
+### Running the Data Aggregator and Emulator
+
+![screenshot for collect_and_emeterize.py](doc/collect_and_emeterize.png)
+
+For real-world deployments, you can use `collect_and_emeterize.py` to continuously collect data from multiple devices that provide modbus or speedwire interfaces (doesnt matter which vendor) and emulate a virtual energy meter that broadcasts aggregated data for consumption by your SMA sunnyportal.
+
+```bash
+python3 collect_and_emeterize.py
+```
+
+This script:
+- **Reads from multiple sources**: Collects power and energy data from SMA inverters via Modbus TCP (type `8001`) and Speedwire gateways (type `9999`)
+- **Aggregates data**: Combines measurements from all configured devices and distributes values across three phases proportionally based on phase power
+- **Emulates a virtual meter**: Sends aggregated data as SMA Energy Meter packets to the multicast address at configurable intervals
+- **Handles errors gracefully**: Includes retry logic for Modbus connections, timeouts for Speedwire requests, and continues operating even if individual devices fail
+
+**Configuration:**
+The script reads device and system settings from `config.json`, which includes:
+- Device list with IP addresses and types (Modbus or Speedwire)
+- Modbus connection parameters (base IP, port, retry settings)
+- Multicast settings for packet broadcasting
+- Scheduler interval for data collection
+- Logging configuration
+
+**Example `config.json` structure:**
+see `config.json`
 
 ## Testing
 
