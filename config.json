@@ -9,8 +9,8 @@
     "ttl": 32
   },
   "emeter": {
-    "serial_number": 12345678,
-    "totalyieldbaseline": 107.411
+    "serial_number": 1901404595,
+    "totalyieldbaseline": 107345
   },
   "modbus": {
     "base_ip": "192.168.10",
