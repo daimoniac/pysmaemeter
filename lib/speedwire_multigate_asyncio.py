@@ -66,6 +66,16 @@ class SpeedwireClient:
             
             self.response_future.set_result(self.sma_data)
 
+    def connection_lost(self, exc):
+        """Called when the connection is lost or closed."""
+        if exc:
+            # If there was an error, log it
+            import logging
+            logging.warning(f"Speedwire connection lost: {exc}")
+        # If the response future hasn't been resolved yet, set it with the data we have
+        if not self.response_future.done():
+            self.response_future.set_result(self.sma_data)
+
     def get_code(self, data):
         return unpack('I', data[42:46])[0]
 
