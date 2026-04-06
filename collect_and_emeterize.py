@@ -527,15 +527,23 @@ def main() -> None:
                 if state_changed:
                     save_total_counter_state(total_counter_state)
 
+                # Use the higher of current daily yield or day_max to prevent
+                # the total counter going backwards when inverters reset their
+                # daily counters at local midnight (before our server rollover).
+                effective_daily_yield_wh = max(
+                    current_daily_yield_wh,
+                    total_counter_state['day_max_wh']
+                )
                 total_emitted_yield_wh = (
                     baseline_wh
                     + total_counter_state['accumulated_wh']
-                    + current_daily_yield_wh
+                    + effective_daily_yield_wh
                 )
                 logging.debug(
                     f"Total emitted yield: baseline={baseline_wh}Wh, "
                     f"accumulated={total_counter_state['accumulated_wh']}Wh, "
-                    f"today={current_daily_yield_wh}Wh, emitted={total_emitted_yield_wh}Wh"
+                    f"today={current_daily_yield_wh}Wh, effective={effective_daily_yield_wh}Wh, "
+                    f"emitted={total_emitted_yield_wh}Wh"
                 )
 
                 send_emeter_packet(
