@@ -507,6 +507,9 @@ def main() -> None:
                 state_changed = False
 
                 # Midnight rollover: add previous day max once and start a fresh day.
+                # On the rollover cycle, discard the current daily yield reading
+                # because inverters may not have reset their daily counters yet,
+                # causing a stale reading to be captured as the new day's max.
                 if total_counter_state['date'] != current_date:
                     previous_day = total_counter_state['date']
                     previous_day_max_wh = total_counter_state['day_max_wh']
@@ -514,13 +517,13 @@ def main() -> None:
                     total_counter_state['date'] = current_date
                     total_counter_state['day_max_wh'] = 0
                     state_changed = True
+                    current_daily_yield_wh = 0
                     logging.info(
                         f"Daily rollover {previous_day} -> {current_date}: "
                         f"added {previous_day_max_wh}Wh to accumulated total "
                         f"({total_counter_state['accumulated_wh']}Wh)"
                     )
-
-                if current_daily_yield_wh > total_counter_state['day_max_wh']:
+                elif current_daily_yield_wh > total_counter_state['day_max_wh']:
                     total_counter_state['day_max_wh'] = current_daily_yield_wh
                     state_changed = True
 
