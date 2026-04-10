@@ -59,6 +59,9 @@ SCALING_FACTORS = {
     'energy': 3600    # Energy (Wh) to joules conversion: store value * 3600
 }
 
+# Some inverter firmwares intermittently report this sentinel as daily yield.
+INVALID_DAILY_YIELD_VALUES = {65535}
+
 # Update logging level from config if specified
 logging_config = CONFIG.get('logging', {})
 if logging_config:
@@ -165,6 +168,23 @@ def distribute_phase_values(total_value: int, p1: int, p2: int, p3: int) -> tupl
         p2_value = total_value // 3
         p3_value = total_value - p1_value - p2_value
     return p1_value, p2_value, p3_value
+
+
+def sanitize_daily_yield(value: Any, device_label: str) -> int:
+    """Normalize known invalid daily-yield values to 0."""
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        logging.warning(f"Invalid daily yield for {device_label}: {value!r}. Using 0.")
+        return 0
+
+    if normalized in INVALID_DAILY_YIELD_VALUES:
+        logging.warning(
+            f"Discarding invalid daily yield {normalized} for {device_label}. Using 0."
+        )
+        return 0
+
+    return normalized
 
 
 def validate_configuration() -> None:
@@ -334,7 +354,9 @@ def collect_data() -> Dict[str, Any]:
                 # Extract values from registers
                 # Registers: [30773, 30961, 30775, 30535, 30777, 30779, 30781]
                 total_power = data[2]     # 30775: Total AC power
-                daily_yield = data[3]     # 30535: Daily yield in Wh
+                daily_yield = sanitize_daily_yield(
+                    data[3], f"device {device_id} ({device_info['name']})"
+                )     # 30535: Daily yield in Wh
                 
                 # Get phase data from registers
                 phase_data = _extract_phase_data(total_power, daily_yield, {
@@ -353,7 +375,9 @@ def collect_data() -> Dict[str, Any]:
                 # Speedwire data
                 data = collect_speedwire_data_sync()
                 total_power = data.get('spotacpower', 0)
-                daily_yield = data.get('tagesertrag', 0)
+                daily_yield = sanitize_daily_yield(
+                    data.get('tagesertrag', 0), f"device {device_id} ({device_info['name']})"
+                )
                 
                 # Get phase data from speedwire
                 phase_data = _extract_phase_data(total_power, daily_yield, data)
