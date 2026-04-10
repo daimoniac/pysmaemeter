@@ -230,39 +230,31 @@ async def get_speedwire_data() -> Dict[str, int]:
 def get_values_persistent(ip_addr: str, sma_class: int, retries: Optional[int] = None) -> Optional[List[int]]:
     """
     Reads the registers defined in 'REGISTERS[sma_class]' from the configured base IP.<ip_addr>
-    and returns a list of values. Uses persistent ModbusTcpClient with retry logic.
-    
-    Args:
-        ip_addr: Last octet of IP address (e.g., '191' for 192.168.10.191)
-        sma_class: Device type/class
-        retries: Number of connection retry attempts (uses config value if None)
-    
-    Returns:
-        List of register values or None if all attempts failed
+    and returns a list of values in the exact register order. Uses retry logic.
+
+    Important: partial reads are treated as invalid to avoid shifted index mapping
+    (e.g. daily_yield accidentally reading a phase-power register).
     """
     modbus_config = CONFIG['modbus']
-    if retries is None:
-        retries = modbus_config['retries']
-    
-    local_values: List[int] = []
+    effective_retries = retries if retries is not None else modbus_config['retries']
+
+    register_order = REGISTERS[sma_class]
     unit_id = modbus_config['unit_id']
     host = f"{modbus_config['base_ip']}.{ip_addr}"
-    
-    for attempt in range(retries):
+
+    for attempt in range(effective_retries):
         client = None
         try:
-            # Create a new connection for each attempt
             client = ModbusTcpClient(host, port=modbus_config['port'])
             if not client.connect():
-                # Connection error - may be transient
                 raise ConnectionError(f"Connection to {host}:{modbus_config['port']} not possible")
-            
-            # Read all registers for this device
-            failed_registers = []
-            for addr in REGISTERS[sma_class]:
+
+            register_values: Dict[int, int] = {}
+            failed_registers: List[int] = []
+
+            for addr in register_order:
                 try:
                     result = client.read_holding_registers(address=addr, count=2, unit=unit_id)
-                    # Check if result is an exception response
                     if hasattr(result, 'isError') and result.isError():
                         logging.warning(f"Skipping invalid register {addr} from {host}: {result}")
                         failed_registers.append(addr)
@@ -271,39 +263,38 @@ def get_values_persistent(ip_addr: str, sma_class: int, retries: Optional[int] =
                         logging.warning(f"Skipping register {addr} from {host}: Invalid response {result}")
                         failed_registers.append(addr)
                         continue
-                    logging.debug(f"Reading register {addr} from {host} result: {result.registers[1]}")
-                    local_values.append(result.registers[1])
+
+                    register_values[addr] = int(result.registers[1])
+                    logging.debug(f"Reading register {addr} from {host} result: {register_values[addr]}")
                 except Exception as e:
-                    # Register read failed - skip this register and continue
                     logging.warning(f"Skipping register {addr} from {host}: {e}")
                     failed_registers.append(addr)
                     continue
-            
-            # Check if we got any data at all
-            if not local_values:
-                raise Exception(f"No valid registers readable from {host} (failed: {failed_registers})")
 
-            # All reads successful
-            logging.debug(f"Successfully read {len(local_values)} registers from {host}")
-            return local_values
-            
+            if failed_registers:
+                raise Exception(
+                    f"Incomplete register set from {host}. Failed registers: {failed_registers}"
+                )
+
+            ordered_values = [register_values[addr] for addr in register_order]
+            logging.debug(f"Successfully read {len(ordered_values)} registers from {host}")
+            return ordered_values
+
         except ConnectionError as e:
-            # Transient connection error - retry
-            logging.warning(f"Attempt {attempt + 1}/{retries} - Connection failed for {host}: {e}")
-            if attempt < retries - 1:
-                time.sleep(modbus_config['retry_delay'])  # Wait before retry
+            logging.warning(f"Attempt {attempt + 1}/{effective_retries} - Connection failed for {host}: {e}")
+            if attempt < effective_retries - 1:
+                time.sleep(modbus_config['retry_delay'])
             continue
-            
+
         except Exception as e:
-            # Other error - don't retry
             logging.error(f"Permanent error reading from {host}: {e}")
             return None
-            
+
         finally:
             if client:
                 client.close()
-    
-    logging.error(f"Failed to read from {host} after {retries} attempts")
+
+    logging.error(f"Failed to read from {host} after {effective_retries} attempts")
     return None
 
 
@@ -316,21 +307,21 @@ def collect_speedwire_data_sync() -> Dict[str, int]:
         return {'spotacpower': 0, 'tagesertrag': 0}
 
 
-def _extract_phase_data(total_power: int, daily_yield: int, phase_power_data: Dict[str, int]) -> Dict[str, int]:
-    """Extract and calculate phase data from raw device data"""
+def _extract_phase_data(total_power: int, daily_yield: int, phase_power_data: Dict[str, int], device_label: str = '') -> Dict[str, int]:
+    """Extract and calculate phase data from raw device data."""
     # Get phase powers (with fallback to equal distribution)
     p1_power = phase_power_data.get('p1_power', 0) or total_power // 3
     p2_power = phase_power_data.get('p2_power', 0) or total_power // 3
     p3_power = phase_power_data.get('p3_power', 0) or (total_power - p1_power - p2_power)
-    
+
     # Get phase yields (calculate if not provided)
-    if all(phase_power_data.get(f'p{i}_yield') for i in [1, 2, 3]):
-        p1_yield = phase_power_data['p1_yield']
-        p2_yield = phase_power_data['p2_yield']
-        p3_yield = phase_power_data['p3_yield']
+    if all(phase_power_data.get(f'p{i}_yield') is not None for i in [1, 2, 3]):
+        p1_yield = sanitize_daily_yield(phase_power_data['p1_yield'], f"{device_label} p1_yield")
+        p2_yield = sanitize_daily_yield(phase_power_data['p2_yield'], f"{device_label} p2_yield")
+        p3_yield = sanitize_daily_yield(phase_power_data['p3_yield'], f"{device_label} p3_yield")
     else:
         p1_yield, p2_yield, p3_yield = distribute_phase_values(daily_yield, p1_power, p2_power, p3_power)
-    
+
     return {
         'p1_power': p1_power, 'p1_yield': p1_yield,
         'p2_power': p2_power, 'p2_yield': p2_yield,
@@ -363,7 +354,7 @@ def collect_data() -> Dict[str, Any]:
                     'p1_power': data[4],  # 30777: Power L1
                     'p2_power': data[5],  # 30779: Power L2
                     'p3_power': data[6]   # 30781: Power L3
-                })
+                }, f"device {device_id} ({device_info['name']})")
                 
                 data_collection[device_id] = {
                     'total_power': total_power,
@@ -380,7 +371,12 @@ def collect_data() -> Dict[str, Any]:
                 )
                 
                 # Get phase data from speedwire
-                phase_data = _extract_phase_data(total_power, daily_yield, data)
+                phase_data = _extract_phase_data(
+                    total_power,
+                    daily_yield,
+                    data,
+                    f"device {device_id} ({device_info['name']})"
+                )
                 
                 data_collection[device_id] = {
                     'total_power': total_power,
@@ -527,7 +523,11 @@ def main() -> None:
             if 'aggregate' in data_collection:
                 agg = data_collection['aggregate']
                 current_date = _current_date()
-                current_daily_yield_wh = max(0, int(agg.get('daily_yield', 0) or 0))
+                current_daily_yield_wh = sanitize_daily_yield(
+                    agg.get('daily_yield', 0),
+                    'aggregate daily_yield'
+                )
+                current_daily_yield_wh = max(0, current_daily_yield_wh)
                 state_changed = False
 
                 # Midnight rollover: add previous day max once and start a fresh day.
