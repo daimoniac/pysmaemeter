@@ -25,6 +25,10 @@
   "scheduler": {
     "interval_seconds": 1
   },
+  "snooze": {
+    "start": "23:00",
+    "end": "03:00"
+  },
   "devices": {
     "191": {
       "type": 8001,

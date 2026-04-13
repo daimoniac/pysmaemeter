@@ -187,6 +187,39 @@ def sanitize_daily_yield(value: Any, device_label: str) -> int:
     return normalized
 
 
+def is_snooze_time() -> bool:
+    """Returns True if the current local time falls within the configured snooze window.
+
+    The window is defined by 'snooze.start' and 'snooze.end' in config.json (HH:MM format).
+    Ranges that wrap midnight (e.g. 23:00–03:00) are handled correctly.
+    Returns False if no snooze section is configured.
+    """
+    snooze_config = CONFIG.get('snooze')
+    if not snooze_config:
+        return False
+
+    try:
+        start_str = snooze_config['start']
+        end_str = snooze_config['end']
+        start_h, start_m = map(int, start_str.split(':'))
+        end_h, end_m = map(int, end_str.split(':'))
+    except (KeyError, ValueError):
+        logging.warning("Invalid snooze configuration; snooze disabled.")
+        return False
+
+    now = time.localtime()
+    current_minutes = now.tm_hour * 60 + now.tm_min
+    start_minutes = start_h * 60 + start_m
+    end_minutes = end_h * 60 + end_m
+
+    if start_minutes <= end_minutes:
+        # Simple same-day range
+        return start_minutes <= current_minutes < end_minutes
+    else:
+        # Wraps midnight (e.g. 23:00 – 03:00)
+        return current_minutes >= start_minutes or current_minutes < end_minutes
+
+
 def validate_configuration() -> None:
     """Validate device configuration at startup"""
     required_device_fields = {'type', 'name'}
@@ -515,6 +548,10 @@ def main() -> None:
     def scheduled_task() -> None:
         try:
             nonlocal total_counter_state
+
+            if is_snooze_time():
+                logging.debug("Snooze time active, skipping data collection.")
+                return
 
             data_collection = collect_data()
             logging.debug(f"Data collection completed: {data_collection}")
