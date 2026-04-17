@@ -566,6 +566,104 @@ def send_emeter_packet(power: int, energy: int, p1_power: int = 0, p1_yield: int
     ))
 
 
+class SchedulerState:
+    """Manages mutable state for the scheduled data-collection loop."""
+
+    def __init__(self, total_counter_state: Dict[str, Any], baseline_wh: int) -> None:
+        self.total_counter_state = total_counter_state
+        self.baseline_wh = baseline_wh
+        self.snooze_frozen_payload: Optional[Dict[str, Any]] = None
+        self.snooze_was_active = False
+
+    def build_fallback_snooze_payload(self) -> Dict[str, Any]:
+        """Build a stable payload if startup happens during snooze."""
+        fallback_daily_yield_wh = max(0, int(self.total_counter_state['day_max_wh']))
+        p1_yield, p2_yield, p3_yield = distribute_phase_values(fallback_daily_yield_wh, 1, 1, 1)
+        fallback_total_emitted_wh = (
+            self.baseline_wh
+            + self.total_counter_state['accumulated_wh']
+            + fallback_daily_yield_wh
+        )
+        return {
+            'energy': fallback_daily_yield_wh,
+            'p1_yield': p1_yield,
+            'p2_yield': p2_yield,
+            'p3_yield': p3_yield,
+            'total_negative_active_energy': fallback_total_emitted_wh / 1000
+        }
+
+    def build_payload_from_aggregate(self, agg: Dict[str, Any]) -> Dict[str, Any]:
+        """Build emitted payload from aggregate data and persisted rollover state."""
+        daily_yield_wh, total_emitted_wh = _update_rollover_state(
+            self.total_counter_state, agg.get('daily_yield', 0), self.baseline_wh
+        )
+        return {
+            'energy': daily_yield_wh,
+            'p1_yield': agg.get('p1_yield', 0),
+            'p2_yield': agg.get('p2_yield', 0),
+            'p3_yield': agg.get('p3_yield', 0),
+            'total_negative_active_energy': total_emitted_wh / 1000
+        }
+
+    def _handle_snooze(self) -> None:
+        """Capture a frozen snapshot on snooze entry and send zero-power packets."""
+        if not self.snooze_was_active:
+            if self.snooze_frozen_payload is None:
+                # If we enter snooze without prior live data (e.g. startup during snooze),
+                # do one fresh read and freeze that snapshot for the whole snooze window.
+                try:
+                    data_collection = collect_data()
+                    if 'aggregate' in data_collection:
+                        self.snooze_frozen_payload = self.build_payload_from_aggregate(data_collection['aggregate'])
+                        logging.info("Snooze entry snapshot captured from fresh device read.")
+                    else:
+                        self.snooze_frozen_payload = self.build_fallback_snooze_payload()
+                        logging.warning("Snooze entry snapshot unavailable from live data; using persisted fallback.")
+                except Exception as e:
+                    self.snooze_frozen_payload = self.build_fallback_snooze_payload()
+                    logging.warning(
+                        f"Snooze entry fresh read failed ({e}); using persisted fallback snapshot."
+                    )
+            logging.info("Snooze active: data reads paused, continuing packet transmission with frozen counters.")
+
+        frozen = self.snooze_frozen_payload or self.build_fallback_snooze_payload()
+        send_emeter_packet(
+            power=0, p1_power=0, p2_power=0, p3_power=0,
+            log_prefix='SNOOZE ACTIVE - ', **frozen
+        )
+        self.snooze_was_active = True
+
+    def tick(self) -> None:
+        """Execute one scheduled cycle: collect data and send emeter packet."""
+        try:
+            if is_snooze_time():
+                self._handle_snooze()
+                return
+
+            if self.snooze_was_active:
+                logging.info("Snooze ended: resuming live data reads.")
+                self.snooze_was_active = False
+
+            data_collection = collect_data()
+            logging.debug(f"Data collection completed: {data_collection}")
+
+            if 'aggregate' in data_collection:
+                agg = data_collection['aggregate']
+                payload = self.build_payload_from_aggregate(agg)
+
+                send_emeter_packet(
+                    power=agg.get('total_power', 0),
+                    p1_power=agg.get('p1_power', 0),
+                    p2_power=agg.get('p2_power', 0),
+                    p3_power=agg.get('p3_power', 0),
+                    **payload
+                )
+
+                self.snooze_frozen_payload = payload
+        except Exception as e:
+            logging.error(f"Error in scheduled task: {e}")
+
+
 def main() -> None:
     """Main function to start the data aggregator and virtual emeter"""
     try:
@@ -588,110 +686,16 @@ def main() -> None:
     except Exception as e:
         logging.error(f"Unable to persist initial total counter state: {e}")
         return
-    
+
     logging.info("Starting SMA data aggregator and virtual emeter...")
 
-    # Values to keep constant while snooze is active.
-    snooze_frozen_payload: Optional[Dict[str, Any]] = None
-    snooze_was_active = False
+    state = SchedulerState(total_counter_state, baseline_wh)
 
-    def build_fallback_snooze_payload() -> Dict[str, Any]:
-        """Build a stable payload if startup happens during snooze."""
-        fallback_daily_yield_wh = max(0, int(total_counter_state['day_max_wh']))
-        p1_yield, p2_yield, p3_yield = distribute_phase_values(fallback_daily_yield_wh, 1, 1, 1)
-        fallback_total_emitted_wh = (
-            baseline_wh
-            + total_counter_state['accumulated_wh']
-            + fallback_daily_yield_wh
-        )
-        return {
-            'energy': fallback_daily_yield_wh,
-            'p1_yield': p1_yield,
-            'p2_yield': p2_yield,
-            'p3_yield': p3_yield,
-            'total_negative_active_energy': fallback_total_emitted_wh / 1000
-        }
-
-    def build_payload_from_aggregate(agg: Dict[str, Any]) -> Dict[str, Any]:
-        """Build emitted payload from aggregate data and persisted rollover state."""
-        daily_yield_wh, total_emitted_wh = _update_rollover_state(
-            total_counter_state, agg.get('daily_yield', 0), baseline_wh
-        )
-        return {
-            'energy': daily_yield_wh,
-            'p1_yield': agg.get('p1_yield', 0),
-            'p2_yield': agg.get('p2_yield', 0),
-            'p3_yield': agg.get('p3_yield', 0),
-            'total_negative_active_energy': total_emitted_wh / 1000
-        }
-    
-    # Define scheduled task that collects and sends data
-    def scheduled_task() -> None:
-        try:
-            nonlocal total_counter_state
-            nonlocal snooze_frozen_payload
-            nonlocal snooze_was_active
-
-            if is_snooze_time():
-                if not snooze_was_active:
-                    if snooze_frozen_payload is None:
-                        # If we enter snooze without prior live data (e.g. startup during snooze),
-                        # do one fresh read and freeze that snapshot for the whole snooze window.
-                        try:
-                            data_collection = collect_data()
-                            if 'aggregate' in data_collection:
-                                snooze_frozen_payload = build_payload_from_aggregate(data_collection['aggregate'])
-                                logging.info("Snooze entry snapshot captured from fresh device read.")
-                            else:
-                                snooze_frozen_payload = build_fallback_snooze_payload()
-                                logging.warning("Snooze entry snapshot unavailable from live data; using persisted fallback.")
-                        except Exception as e:
-                            snooze_frozen_payload = build_fallback_snooze_payload()
-                            logging.warning(
-                                f"Snooze entry fresh read failed ({e}); using persisted fallback snapshot."
-                            )
-                    logging.info("Snooze active: data reads paused, continuing packet transmission with frozen counters.")
-
-                frozen = snooze_frozen_payload
-                if frozen is None:
-                    frozen = build_fallback_snooze_payload()
-
-                send_emeter_packet(
-                    power=0, p1_power=0, p2_power=0, p3_power=0,
-                    log_prefix='SNOOZE ACTIVE - ', **frozen
-                )
-                snooze_was_active = True
-                return
-
-            if snooze_was_active:
-                logging.info("Snooze ended: resuming live data reads.")
-                snooze_was_active = False
-
-            data_collection = collect_data()
-            logging.debug(f"Data collection completed: {data_collection}")
-            
-            # Send the aggregated data as emeterPacket
-            if 'aggregate' in data_collection:
-                agg = data_collection['aggregate']
-                payload = build_payload_from_aggregate(agg)
-
-                send_emeter_packet(
-                    power=agg.get('total_power', 0),
-                    p1_power=agg.get('p1_power', 0),
-                    p2_power=agg.get('p2_power', 0),
-                    p3_power=agg.get('p3_power', 0),
-                    **payload
-                )
-
-                snooze_frozen_payload = payload
-        except Exception as e:
-            logging.error(f"Error in scheduled task: {e}")
-    
     # Schedule to run every N seconds (configurable)
-    schedule.every(CONFIG['scheduler']['interval_seconds']).seconds.do(scheduled_task)
+    schedule.every(CONFIG['scheduler']['interval_seconds']).seconds.do(state.tick)
 
     # Run once at startup
-    scheduled_task()
+    state.tick()
 
     # Main loop with improved error handling
     while True:
