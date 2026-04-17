@@ -187,6 +187,56 @@ def sanitize_daily_yield(value: Any, device_label: str) -> int:
     return normalized
 
 
+def _update_rollover_state(state: Dict[str, Any], raw_daily_yield_wh: int, baseline_wh: int) -> tuple[int, int]:
+    """Update daily rollover counters and compute effective yield totals.
+
+    Mutates *state* in place and persists to disk when changed.
+
+    Returns:
+        (current_daily_yield_wh, total_emitted_yield_wh) in Wh.
+    """
+    current_date = _current_date()
+    current_daily_yield_wh = max(0, sanitize_daily_yield(raw_daily_yield_wh, 'aggregate daily_yield'))
+    state_changed = False
+
+    # Midnight rollover: add previous day max once and start a fresh day.
+    # On the rollover cycle, discard the current daily yield reading
+    # because inverters may not have reset their daily counters yet,
+    # causing a stale reading to be captured as the new day's max.
+    if state['date'] != current_date:
+        previous_day = state['date']
+        previous_day_max_wh = state['day_max_wh']
+        state['accumulated_wh'] += previous_day_max_wh
+        state['date'] = current_date
+        state['day_max_wh'] = 0
+        state_changed = True
+        current_daily_yield_wh = 0
+        logging.info(
+            f"Daily rollover {previous_day} -> {current_date}: "
+            f"added {previous_day_max_wh}Wh to accumulated total "
+            f"({state['accumulated_wh']}Wh)"
+        )
+    elif current_daily_yield_wh > state['day_max_wh']:
+        state['day_max_wh'] = current_daily_yield_wh
+        state_changed = True
+
+    if state_changed:
+        save_total_counter_state(state)
+
+    # Use the higher of current daily yield or day_max to prevent
+    # the total counter going backwards when inverters reset their
+    # daily counters at local midnight (before our server rollover).
+    effective_daily_yield_wh = max(current_daily_yield_wh, state['day_max_wh'])
+    total_emitted_yield_wh = baseline_wh + state['accumulated_wh'] + effective_daily_yield_wh
+    logging.debug(
+        f"Total emitted yield: baseline={baseline_wh}Wh, "
+        f"accumulated={state['accumulated_wh']}Wh, "
+        f"today={current_daily_yield_wh}Wh, effective={effective_daily_yield_wh}Wh, "
+        f"emitted={total_emitted_yield_wh}Wh"
+    )
+    return current_daily_yield_wh, total_emitted_yield_wh
+
+
 def is_snooze_time() -> bool:
     """Returns True if the current local time falls within the configured snooze window.
 
@@ -550,65 +600,15 @@ def main() -> None:
 
     def build_payload_from_aggregate(agg: Dict[str, Any]) -> Dict[str, Any]:
         """Build emitted payload from aggregate data and persisted rollover state."""
-        nonlocal total_counter_state
-
-        current_date = _current_date()
-        current_daily_yield_wh = sanitize_daily_yield(
-            agg.get('daily_yield', 0),
-            'aggregate daily_yield'
+        daily_yield_wh, total_emitted_wh = _update_rollover_state(
+            total_counter_state, agg.get('daily_yield', 0), baseline_wh
         )
-        current_daily_yield_wh = max(0, current_daily_yield_wh)
-        state_changed = False
-
-        # Midnight rollover: add previous day max once and start a fresh day.
-        # On the rollover cycle, discard the current daily yield reading
-        # because inverters may not have reset their daily counters yet,
-        # causing a stale reading to be captured as the new day's max.
-        if total_counter_state['date'] != current_date:
-            previous_day = total_counter_state['date']
-            previous_day_max_wh = total_counter_state['day_max_wh']
-            total_counter_state['accumulated_wh'] += previous_day_max_wh
-            total_counter_state['date'] = current_date
-            total_counter_state['day_max_wh'] = 0
-            state_changed = True
-            current_daily_yield_wh = 0
-            logging.info(
-                f"Daily rollover {previous_day} -> {current_date}: "
-                f"added {previous_day_max_wh}Wh to accumulated total "
-                f"({total_counter_state['accumulated_wh']}Wh)"
-            )
-        elif current_daily_yield_wh > total_counter_state['day_max_wh']:
-            total_counter_state['day_max_wh'] = current_daily_yield_wh
-            state_changed = True
-
-        if state_changed:
-            save_total_counter_state(total_counter_state)
-
-        # Use the higher of current daily yield or day_max to prevent
-        # the total counter going backwards when inverters reset their
-        # daily counters at local midnight (before our server rollover).
-        effective_daily_yield_wh = max(
-            current_daily_yield_wh,
-            total_counter_state['day_max_wh']
-        )
-        total_emitted_yield_wh = (
-            baseline_wh
-            + total_counter_state['accumulated_wh']
-            + effective_daily_yield_wh
-        )
-        logging.debug(
-            f"Total emitted yield: baseline={baseline_wh}Wh, "
-            f"accumulated={total_counter_state['accumulated_wh']}Wh, "
-            f"today={current_daily_yield_wh}Wh, effective={effective_daily_yield_wh}Wh, "
-            f"emitted={total_emitted_yield_wh}Wh"
-        )
-
         return {
-            'energy': current_daily_yield_wh,
+            'energy': daily_yield_wh,
             'p1_yield': agg.get('p1_yield', 0),
             'p2_yield': agg.get('p2_yield', 0),
             'p3_yield': agg.get('p3_yield', 0),
-            'total_negative_active_energy': total_emitted_yield_wh / 1000
+            'total_negative_active_energy': total_emitted_wh / 1000
         }
     
     # Define scheduled task that collects and sends data
