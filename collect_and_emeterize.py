@@ -515,15 +515,8 @@ def build_emeter_packet(power: int, energy: int, p1_power: int = 0, p1_yield: in
     if total_negative_active_energy is None:
         total_negative_active_energy = energy / 1000  # Wh fallback converted to kWh
 
-    # Add total values. Use dedicated total_negative_active_energy for SMA_NEGATIVE_ACTIVE_ENERGY.
-    # total_negative_active_energy is in kWh; multiply by 1000 to get Wh, then by 3600 to get J.
-    packet.addMeasurementValue(emeterPacket.SMA_POSITIVE_ACTIVE_POWER, 0)
-    packet.addCounterValue(emeterPacket.SMA_POSITIVE_ACTIVE_ENERGY, 0)
-    packet.addMeasurementValue(emeterPacket.SMA_NEGATIVE_ACTIVE_POWER, int(power * SCALING_FACTORS['power']))
-    packet.addCounterValue(
-        emeterPacket.SMA_NEGATIVE_ACTIVE_ENERGY,
-        int(total_negative_active_energy * 1000 * SCALING_FACTORS['energy'])
-    )
+    # Add total values (kWh -> Wh for the energy arg)
+    add_phase_measurements(packet, '', power, int(total_negative_active_energy * 1000))
 
     # Add per-phase values
     add_phase_measurements(packet, '_L1', p1_power, p1_yield)
