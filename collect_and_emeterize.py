@@ -657,16 +657,8 @@ def main() -> None:
                     frozen = build_fallback_snooze_payload()
 
                 send_emeter_packet(
-                    power=0,
-                    energy=int(frozen['energy']),
-                    p1_power=0,
-                    p1_yield=int(frozen['p1_yield']),
-                    p2_power=0,
-                    p2_yield=int(frozen['p2_yield']),
-                    p3_power=0,
-                    p3_yield=int(frozen['p3_yield']),
-                    total_negative_active_energy=float(frozen['total_negative_active_energy']),
-                    log_prefix='SNOOZE ACTIVE - '
+                    power=0, p1_power=0, p2_power=0, p3_power=0,
+                    log_prefix='SNOOZE ACTIVE - ', **frozen
                 )
                 snooze_was_active = True
                 return
@@ -685,14 +677,10 @@ def main() -> None:
 
                 send_emeter_packet(
                     power=agg.get('total_power', 0),
-                    energy=int(payload['energy']),
                     p1_power=agg.get('p1_power', 0),
-                    p1_yield=agg.get('p1_yield', 0),
                     p2_power=agg.get('p2_power', 0),
-                    p2_yield=agg.get('p2_yield', 0),
                     p3_power=agg.get('p3_power', 0),
-                    p3_yield=agg.get('p3_yield', 0),
-                    total_negative_active_energy=float(payload['total_negative_active_energy'])
+                    **payload
                 )
 
                 snooze_frozen_payload = payload
