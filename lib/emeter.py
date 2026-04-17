@@ -1,3 +1,4 @@
+import struct
 from typing import Optional
 
 class emeterPacket:
@@ -62,6 +63,61 @@ class emeterPacket:
     SMA_VOLTAGE_L3 = 0x00480400  # Channel 72 (0x48)
     SMA_VERSION = 0x90000000
 
+    # Per-phase constant groups for iteration
+    PHASE_CONSTANTS = (
+        {
+            'positive_active_power': SMA_POSITIVE_ACTIVE_POWER_L1,
+            'positive_active_energy': SMA_POSITIVE_ACTIVE_ENERGY_L1,
+            'negative_active_power': SMA_NEGATIVE_ACTIVE_POWER_L1,
+            'negative_active_energy': SMA_NEGATIVE_ACTIVE_ENERGY_L1,
+            'positive_reactive_power': SMA_POSITIVE_REACTIVE_POWER_L1,
+            'positive_reactive_energy': SMA_POSITIVE_REACTIVE_ENERGY_L1,
+            'negative_reactive_power': SMA_NEGATIVE_REACTIVE_POWER_L1,
+            'negative_reactive_energy': SMA_NEGATIVE_REACTIVE_ENERGY_L1,
+            'positive_apparent_power': SMA_POSITIVE_APPARENT_POWER_L1,
+            'positive_apparent_energy': SMA_POSITIVE_APPARENT_ENERGY_L1,
+            'negative_apparent_power': SMA_NEGATIVE_APPARENT_POWER_L1,
+            'negative_apparent_energy': SMA_NEGATIVE_APPARENT_ENERGY_L1,
+            'current': SMA_CURRENT_L1,
+            'voltage': SMA_VOLTAGE_L1,
+            'power_factor': SMA_POWER_FACTOR_L1,
+        },
+        {
+            'positive_active_power': SMA_POSITIVE_ACTIVE_POWER_L2,
+            'positive_active_energy': SMA_POSITIVE_ACTIVE_ENERGY_L2,
+            'negative_active_power': SMA_NEGATIVE_ACTIVE_POWER_L2,
+            'negative_active_energy': SMA_NEGATIVE_ACTIVE_ENERGY_L2,
+            'positive_reactive_power': SMA_POSITIVE_REACTIVE_POWER_L2,
+            'positive_reactive_energy': SMA_POSITIVE_REACTIVE_ENERGY_L2,
+            'negative_reactive_power': SMA_NEGATIVE_REACTIVE_POWER_L2,
+            'negative_reactive_energy': SMA_NEGATIVE_REACTIVE_ENERGY_L2,
+            'positive_apparent_power': SMA_POSITIVE_APPARENT_POWER_L2,
+            'positive_apparent_energy': SMA_POSITIVE_APPARENT_ENERGY_L2,
+            'negative_apparent_power': SMA_NEGATIVE_APPARENT_POWER_L2,
+            'negative_apparent_energy': SMA_NEGATIVE_APPARENT_ENERGY_L2,
+            'current': SMA_CURRENT_L2,
+            'voltage': SMA_VOLTAGE_L2,
+            'power_factor': SMA_POWER_FACTOR_L2,
+        },
+        {
+            'positive_active_power': SMA_POSITIVE_ACTIVE_POWER_L3,
+            'positive_active_energy': SMA_POSITIVE_ACTIVE_ENERGY_L3,
+            'negative_active_power': SMA_NEGATIVE_ACTIVE_POWER_L3,
+            'negative_active_energy': SMA_NEGATIVE_ACTIVE_ENERGY_L3,
+            'positive_reactive_power': SMA_POSITIVE_REACTIVE_POWER_L3,
+            'positive_reactive_energy': SMA_POSITIVE_REACTIVE_ENERGY_L3,
+            'negative_reactive_power': SMA_NEGATIVE_REACTIVE_POWER_L3,
+            'negative_reactive_energy': SMA_NEGATIVE_REACTIVE_ENERGY_L3,
+            'positive_apparent_power': SMA_POSITIVE_APPARENT_POWER_L3,
+            'positive_apparent_energy': SMA_POSITIVE_APPARENT_ENERGY_L3,
+            'negative_apparent_power': SMA_NEGATIVE_APPARENT_POWER_L3,
+            'negative_apparent_energy': SMA_NEGATIVE_APPARENT_ENERGY_L3,
+            'current': SMA_CURRENT_L3,
+            'voltage': SMA_VOLTAGE_L3,
+            'power_factor': SMA_POWER_FACTOR_L3,
+        },
+    )
+
     INITIAL_PAYLOAD_LENGTH = 12
     METER_PACKET_SIZE = 1000
 
@@ -113,59 +169,23 @@ class emeterPacket:
         self.addMeasurementValue(emeterPacket.SMA_POWER_FACTOR, 0)
 
         # Per-phase (L1, L2, L3)
-        # L1
-        if not skip_phase_values:
-            self.addMeasurementValue(emeterPacket.SMA_POSITIVE_ACTIVE_POWER_L1, 0)
-            self.addCounterValue(emeterPacket.SMA_POSITIVE_ACTIVE_ENERGY_L1, 0)
-            self.addMeasurementValue(emeterPacket.SMA_NEGATIVE_ACTIVE_POWER_L1, 0)
-            self.addCounterValue(emeterPacket.SMA_NEGATIVE_ACTIVE_ENERGY_L1, 0)
-        self.addMeasurementValue(emeterPacket.SMA_POSITIVE_REACTIVE_POWER_L1, 0)
-        self.addCounterValue(emeterPacket.SMA_POSITIVE_REACTIVE_ENERGY_L1, 0)
-        self.addMeasurementValue(emeterPacket.SMA_NEGATIVE_REACTIVE_POWER_L1, 0)
-        self.addCounterValue(emeterPacket.SMA_NEGATIVE_REACTIVE_ENERGY_L1, 0)
-        self.addMeasurementValue(emeterPacket.SMA_POSITIVE_APPARENT_POWER_L1, 0)
-        self.addCounterValue(emeterPacket.SMA_POSITIVE_APPARENT_ENERGY_L1, 0)
-        self.addMeasurementValue(emeterPacket.SMA_NEGATIVE_APPARENT_POWER_L1, 0)
-        self.addCounterValue(emeterPacket.SMA_NEGATIVE_APPARENT_ENERGY_L1, 0)
-        self.addMeasurementValue(emeterPacket.SMA_CURRENT_L1, 0)
-        self.addMeasurementValue(emeterPacket.SMA_VOLTAGE_L1, 0)
-        self.addMeasurementValue(emeterPacket.SMA_POWER_FACTOR_L1, 0) 
-
-        # L2
-        if not skip_phase_values:
-            self.addMeasurementValue(emeterPacket.SMA_POSITIVE_ACTIVE_POWER_L2, 0)
-            self.addCounterValue(emeterPacket.SMA_POSITIVE_ACTIVE_ENERGY_L2, 0)
-            self.addMeasurementValue(emeterPacket.SMA_NEGATIVE_ACTIVE_POWER_L2, 0)
-            self.addCounterValue(emeterPacket.SMA_NEGATIVE_ACTIVE_ENERGY_L2, 0)
-        self.addMeasurementValue(emeterPacket.SMA_POSITIVE_REACTIVE_POWER_L2, 0)
-        self.addCounterValue(emeterPacket.SMA_POSITIVE_REACTIVE_ENERGY_L2, 0)
-        self.addMeasurementValue(emeterPacket.SMA_NEGATIVE_REACTIVE_POWER_L2, 0)
-        self.addCounterValue(emeterPacket.SMA_NEGATIVE_REACTIVE_ENERGY_L2, 0)
-        self.addMeasurementValue(emeterPacket.SMA_POSITIVE_APPARENT_POWER_L2, 0)
-        self.addCounterValue(emeterPacket.SMA_POSITIVE_APPARENT_ENERGY_L2, 0)
-        self.addMeasurementValue(emeterPacket.SMA_NEGATIVE_APPARENT_POWER_L2, 0)
-        self.addCounterValue(emeterPacket.SMA_NEGATIVE_APPARENT_ENERGY_L2, 0)
-        self.addMeasurementValue(emeterPacket.SMA_CURRENT_L2, 0)
-        self.addMeasurementValue(emeterPacket.SMA_VOLTAGE_L2, 0)
-        self.addMeasurementValue(emeterPacket.SMA_POWER_FACTOR_L2, 0)
-
-        # L3
-        if not skip_phase_values:
-            self.addMeasurementValue(emeterPacket.SMA_POSITIVE_ACTIVE_POWER_L3, 0)
-            self.addCounterValue(emeterPacket.SMA_POSITIVE_ACTIVE_ENERGY_L3, 0)
-            self.addMeasurementValue(emeterPacket.SMA_NEGATIVE_ACTIVE_POWER_L3, 0)
-            self.addCounterValue(emeterPacket.SMA_NEGATIVE_ACTIVE_ENERGY_L3, 0)
-        self.addMeasurementValue(emeterPacket.SMA_POSITIVE_REACTIVE_POWER_L3, 0)
-        self.addCounterValue(emeterPacket.SMA_POSITIVE_REACTIVE_ENERGY_L3, 0)
-        self.addMeasurementValue(emeterPacket.SMA_NEGATIVE_REACTIVE_POWER_L3, 0)
-        self.addCounterValue(emeterPacket.SMA_NEGATIVE_REACTIVE_ENERGY_L3, 0)
-        self.addMeasurementValue(emeterPacket.SMA_POSITIVE_APPARENT_POWER_L3, 0)
-        self.addCounterValue(emeterPacket.SMA_POSITIVE_APPARENT_ENERGY_L3, 0)
-        self.addMeasurementValue(emeterPacket.SMA_NEGATIVE_APPARENT_POWER_L3, 0)
-        self.addCounterValue(emeterPacket.SMA_NEGATIVE_APPARENT_ENERGY_L3, 0)
-        self.addMeasurementValue(emeterPacket.SMA_CURRENT_L3, 0)
-        self.addMeasurementValue(emeterPacket.SMA_VOLTAGE_L3, 0)
-        self.addMeasurementValue(emeterPacket.SMA_POWER_FACTOR_L3, 0)
+        for phase in emeterPacket.PHASE_CONSTANTS:
+            if not skip_phase_values:
+                self.addMeasurementValue(phase['positive_active_power'], 0)
+                self.addCounterValue(phase['positive_active_energy'], 0)
+                self.addMeasurementValue(phase['negative_active_power'], 0)
+                self.addCounterValue(phase['negative_active_energy'], 0)
+            self.addMeasurementValue(phase['positive_reactive_power'], 0)
+            self.addCounterValue(phase['positive_reactive_energy'], 0)
+            self.addMeasurementValue(phase['negative_reactive_power'], 0)
+            self.addCounterValue(phase['negative_reactive_energy'], 0)
+            self.addMeasurementValue(phase['positive_apparent_power'], 0)
+            self.addCounterValue(phase['positive_apparent_energy'], 0)
+            self.addMeasurementValue(phase['negative_apparent_power'], 0)
+            self.addCounterValue(phase['negative_apparent_energy'], 0)
+            self.addMeasurementValue(phase['current'], 0)
+            self.addMeasurementValue(phase['voltage'], 0)
+            self.addMeasurementValue(phase['power_factor'], 0)
 
     def addMeasurementValue(self, id: int, value: int) -> None:
         """
@@ -228,47 +248,19 @@ class emeterPacket:
         return self._length
 
     def storeU16BE(self, pPos: int, value: int) -> int:
-        """
-        Store a 16-bit unsigned integer in big-endian format.
-
-        Args:
-            pPos (int): Position in the packet.
-            value (int): Value to store.
-
-        Returns:
-            int: Next position after the stored value.
-        """
-        self.meterPacket[pPos] = (value >> 8) & 0xFF
-        self.meterPacket[pPos + 1] = value & 0xFF
+        """Store a 16-bit unsigned integer in big-endian format. Returns next position."""
+        struct.pack_into('>H', self.meterPacket, pPos, value & 0xFFFF)
         return pPos + 2
 
     def storeU32BE(self, pPos: int, value: int) -> int:
-        """
-        Store a 32-bit unsigned integer in big-endian format.
-
-        Args:
-            pPos (int): Position in the packet.
-            value (int): Value to store.
-
-        Returns:
-            int: Next position after the stored value.
-        """
-        pPos = self.storeU16BE(pPos, (value >> 16) & 0xFFFF)
-        return self.storeU16BE(pPos, value & 0xFFFF)
+        """Store a 32-bit unsigned integer in big-endian format. Returns next position."""
+        struct.pack_into('>I', self.meterPacket, pPos, value & 0xFFFFFFFF)
+        return pPos + 4
 
     def storeU64BE(self, pPos: int, value: int) -> int:
-        """
-        Store a 64-bit unsigned integer in big-endian format.
-
-        Args:
-            pPos (int): Position in the packet.
-            value (int): Value to store.
-
-        Returns:
-            int: Next position after the stored value.
-        """
-        pPos = self.storeU32BE(pPos, (value >> 32) & 0xFFFFFFFF)
-        return self.storeU32BE(pPos, value & 0xFFFFFFFF)
+        """Store a 64-bit unsigned integer in big-endian format. Returns next position."""
+        struct.pack_into('>Q', self.meterPacket, pPos, value & 0xFFFFFFFFFFFFFFFF)
+        return pPos + 8
 
     def offsetOf(self, pData: bytearray, identifier: int, size: int) -> Optional[int]:
         """

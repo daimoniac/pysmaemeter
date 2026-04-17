@@ -368,72 +368,54 @@ def collect_data() -> Dict[str, Any]:
     
     for device_id, device_info in SMA_DEVICES.items():
         try:
+            device_label = f"device {device_id} ({device_info['name']})"
+
             if device_info['type'] == 8001:
                 # Inverter data via Modbus
                 data = get_values_persistent(device_id, device_info['type'])
                 if data is None:
-                    logging.warning(f"No data from device {device_id} ({device_info['name']})")
+                    logging.warning(f"No data from {device_label}")
                     continue
                 
-                # Extract values from registers
                 # Registers: [30773, 30961, 30775, 30535, 30777, 30779, 30781]
                 total_power = data[2]     # 30775: Total AC power
-                daily_yield = sanitize_daily_yield(
-                    data[3], f"device {device_id} ({device_info['name']})"
-                )     # 30535: Daily yield in Wh
-                
-                # Get phase data from registers
-                phase_data = _extract_phase_data(total_power, daily_yield, {
+                daily_yield = sanitize_daily_yield(data[3], device_label)
+                phase_power_data = {
                     'p1_power': data[4],  # 30777: Power L1
                     'p2_power': data[5],  # 30779: Power L2
                     'p3_power': data[6]   # 30781: Power L3
-                }, f"device {device_id} ({device_info['name']})")
-                
-                data_collection[device_id] = {
-                    'total_power': total_power,
-                    'daily_yield': daily_yield,
-                    **phase_data
                 }
 
             elif device_info['type'] == 9999:
                 # Speedwire data
                 data = collect_speedwire_data_sync()
                 total_power = data.get('spotacpower', 0)
-                daily_yield = sanitize_daily_yield(
-                    data.get('tagesertrag', 0), f"device {device_id} ({device_info['name']})"
-                )
-                
-                # Get phase data from speedwire
-                phase_data = _extract_phase_data(
-                    total_power,
-                    daily_yield,
-                    data,
-                    f"device {device_id} ({device_info['name']})"
-                )
-                
-                data_collection[device_id] = {
-                    'total_power': total_power,
-                    'daily_yield': daily_yield,
-                    **phase_data
-                }
+                daily_yield = sanitize_daily_yield(data.get('tagesertrag', 0), device_label)
+                phase_power_data = data
+
+            else:
+                continue
+
+            phase_data = _extract_phase_data(total_power, daily_yield, phase_power_data, device_label)
+            data_collection[device_id] = {
+                'total_power': total_power,
+                'daily_yield': daily_yield,
+                **phase_data
+            }
 
         except Exception as e:
             logging.error(f"Error collecting data for device {device_id}: {e}")
             continue
 
     # Calculate aggregate totals per phase
-    aggregate = {
-        'p1_power': sum(d.get('p1_power', 0) for d in data_collection.values()),
-        'p1_yield': sum(d.get('p1_yield', 0) for d in data_collection.values()),
-        'p2_power': sum(d.get('p2_power', 0) for d in data_collection.values()),
-        'p2_yield': sum(d.get('p2_yield', 0) for d in data_collection.values()),
-        'p3_power': sum(d.get('p3_power', 0) for d in data_collection.values()),
-        'p3_yield': sum(d.get('p3_yield', 0) for d in data_collection.values())
-    }
-    
-    # Total power and yield are sum of phases
-    aggregate['total_power'] = aggregate['p1_power'] + aggregate['p2_power'] + aggregate['p3_power']
-    aggregate['daily_yield'] = aggregate['p1_yield'] + aggregate['p2_yield'] + aggregate['p3_yield']
+    aggregate = {}
+    for n in (1, 2, 3):
+        for metric in ('power', 'yield'):
+            key = f'p{n}_{metric}'
+            aggregate[key] = sum(d.get(key, 0) for d in data_collection.values())
+
+    aggregate['total_power'] = sum(aggregate[f'p{n}_power'] for n in (1, 2, 3))
+    aggregate['daily_yield'] = sum(aggregate[f'p{n}_yield'] for n in (1, 2, 3))
     
     data_collection['aggregate'] = aggregate
 
@@ -474,9 +456,9 @@ def send_emeter_packet(power: int, energy: int, p1_power: int = 0, p1_yield: int
     - Negative (supply) = power fed into grid
     For PV inverters, we're supplying power, so we use negative values.
     
-    SMA uses scaling factors defined in SCALING_FACTORS constant:
-    - Power (W): scale factor {SCALING_FACTORS['power']} (store value * {SCALING_FACTORS['power']})
-    - Energy (Wh): convert to joules (value * {SCALING_FACTORS['energy']})
+    SMA scaling factors (from SCALING_FACTORS constant):
+    - Power (W): store value * 10
+    - Energy (Wh): convert to joules (value * 3600)
     """
     packet = emeterPacket(CONFIG['emeter']['serial_number'])
     packet.begin(int(time.time() * 1000), skip_phase_values=True)
