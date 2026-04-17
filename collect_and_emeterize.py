@@ -495,17 +495,16 @@ def add_phase_measurements(packet: emeterPacket, phase_suffix: str, power: int, 
                           int(energy * SCALING_FACTORS['energy']))
 
 
-def send_emeter_packet(power: int, energy: int, p1_power: int = 0, p1_yield: int = 0,
-                       p2_power: int = 0, p2_yield: int = 0, p3_power: int = 0, p3_yield: int = 0,
-                       total_negative_active_energy: Optional[float] = None,
-                       log_prefix: str = '') -> None:
-    """Sends an emeterPacket with the given power (W) and energy (Wh) including per-phase data.
-    
-    SMA convention: 
+def build_emeter_packet(power: int, energy: int, p1_power: int = 0, p1_yield: int = 0,
+                        p2_power: int = 0, p2_yield: int = 0, p3_power: int = 0, p3_yield: int = 0,
+                        total_negative_active_energy: Optional[float] = None) -> bytes:
+    """Build an emeterPacket and return the raw packet bytes.
+
+    SMA convention:
     - Positive (consume) = power drawn from grid
     - Negative (supply) = power fed into grid
     For PV inverters, we're supplying power, so we use negative values.
-    
+
     SMA scaling factors (from SCALING_FACTORS constant):
     - Power (W): store value * 10
     - Energy (Wh): convert to joules (value * 3600)
@@ -530,26 +529,41 @@ def send_emeter_packet(power: int, energy: int, p1_power: int = 0, p1_yield: int
     add_phase_measurements(packet, '_L1', p1_power, p1_yield)
     add_phase_measurements(packet, '_L2', p2_power, p2_yield)
     add_phase_measurements(packet, '_L3', p3_power, p3_yield)
-    
+
     packet.end()
+    return bytes(packet.getData()[:packet.getLength()])
 
-    # Retrieve the raw packet data
-    data = packet.getData()[:packet.getLength()]
 
-    # Create and send UDP multicast packet
+def _send_multicast(data: bytes, log_msg: str) -> None:
+    """Send raw packet data via UDP multicast."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     try:
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, CONFIG['multicast']['ttl'])
         multicast_config = CONFIG['multicast']
         sock.sendto(data, (multicast_config['address'], multicast_config['port']))
         logging.info(
-            f"{log_prefix}Sent {len(data)} bytes to {multicast_config['address']}:{multicast_config['port']}: "
-            f"Total power: {power}W | Daily energy arg: {energy}Wh | "
-            f"SMA_NEGATIVE_ACTIVE_ENERGY total: {total_negative_active_energy}kWh | "
-            f"L1: {p1_power}W/{p1_yield}Wh | L2: {p2_power}W/{p2_yield}Wh | L3: {p3_power}W/{p3_yield}Wh"
+            f"Sent {len(data)} bytes to {multicast_config['address']}:{multicast_config['port']}: "
+            f"{log_msg}"
         )
     finally:
         sock.close()
+
+
+def send_emeter_packet(power: int, energy: int, p1_power: int = 0, p1_yield: int = 0,
+                       p2_power: int = 0, p2_yield: int = 0, p3_power: int = 0, p3_yield: int = 0,
+                       total_negative_active_energy: Optional[float] = None,
+                       log_prefix: str = '') -> None:
+    """Build and send an emeterPacket with the given power/energy values."""
+    data = build_emeter_packet(
+        power, energy, p1_power, p1_yield, p2_power, p2_yield, p3_power, p3_yield,
+        total_negative_active_energy
+    )
+    _send_multicast(data, (
+        f"{log_prefix}"
+        f"Total power: {power}W | Daily energy arg: {energy}Wh | "
+        f"SMA_NEGATIVE_ACTIVE_ENERGY total: {total_negative_active_energy}kWh | "
+        f"L1: {p1_power}W/{p1_yield}Wh | L2: {p2_power}W/{p2_yield}Wh | L3: {p3_power}W/{p3_yield}Wh"
+    ))
 
 
 def main() -> None:
