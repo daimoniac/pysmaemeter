@@ -465,7 +465,8 @@ def add_phase_measurements(packet: emeterPacket, phase_suffix: str, power: int, 
 
 def send_emeter_packet(power: int, energy: int, p1_power: int = 0, p1_yield: int = 0,
                        p2_power: int = 0, p2_yield: int = 0, p3_power: int = 0, p3_yield: int = 0,
-                       total_negative_active_energy: Optional[float] = None) -> None:
+                       total_negative_active_energy: Optional[float] = None,
+                       log_prefix: str = '') -> None:
     """Sends an emeterPacket with the given power (W) and energy (Wh) including per-phase data.
     
     SMA convention: 
@@ -510,7 +511,7 @@ def send_emeter_packet(power: int, energy: int, p1_power: int = 0, p1_yield: int
         multicast_config = CONFIG['multicast']
         sock.sendto(data, (multicast_config['address'], multicast_config['port']))
         logging.info(
-            f"Sent {len(data)} bytes to {multicast_config['address']}:{multicast_config['port']}: "
+            f"{log_prefix}Sent {len(data)} bytes to {multicast_config['address']}:{multicast_config['port']}: "
             f"Total power: {power}W | Daily energy arg: {energy}Wh | "
             f"SMA_NEGATIVE_ACTIVE_ENERGY total: {total_negative_active_energy}kWh | "
             f"L1: {p1_power}W/{p1_yield}Wh | L2: {p2_power}W/{p2_yield}Wh | L3: {p3_power}W/{p3_yield}Wh"
@@ -543,15 +544,140 @@ def main() -> None:
         return
     
     logging.info("Starting SMA data aggregator and virtual emeter...")
+
+    # Values to keep constant while snooze is active.
+    snooze_frozen_payload: Optional[Dict[str, Any]] = None
+    snooze_was_active = False
+
+    def build_fallback_snooze_payload() -> Dict[str, Any]:
+        """Build a stable payload if startup happens during snooze."""
+        fallback_daily_yield_wh = max(0, int(total_counter_state['day_max_wh']))
+        p1_yield, p2_yield, p3_yield = distribute_phase_values(fallback_daily_yield_wh, 1, 1, 1)
+        fallback_total_emitted_wh = (
+            baseline_wh
+            + total_counter_state['accumulated_wh']
+            + fallback_daily_yield_wh
+        )
+        return {
+            'energy': fallback_daily_yield_wh,
+            'p1_yield': p1_yield,
+            'p2_yield': p2_yield,
+            'p3_yield': p3_yield,
+            'total_negative_active_energy': fallback_total_emitted_wh / 1000
+        }
+
+    def build_payload_from_aggregate(agg: Dict[str, Any]) -> Dict[str, Any]:
+        """Build emitted payload from aggregate data and persisted rollover state."""
+        nonlocal total_counter_state
+
+        current_date = _current_date()
+        current_daily_yield_wh = sanitize_daily_yield(
+            agg.get('daily_yield', 0),
+            'aggregate daily_yield'
+        )
+        current_daily_yield_wh = max(0, current_daily_yield_wh)
+        state_changed = False
+
+        # Midnight rollover: add previous day max once and start a fresh day.
+        # On the rollover cycle, discard the current daily yield reading
+        # because inverters may not have reset their daily counters yet,
+        # causing a stale reading to be captured as the new day's max.
+        if total_counter_state['date'] != current_date:
+            previous_day = total_counter_state['date']
+            previous_day_max_wh = total_counter_state['day_max_wh']
+            total_counter_state['accumulated_wh'] += previous_day_max_wh
+            total_counter_state['date'] = current_date
+            total_counter_state['day_max_wh'] = 0
+            state_changed = True
+            current_daily_yield_wh = 0
+            logging.info(
+                f"Daily rollover {previous_day} -> {current_date}: "
+                f"added {previous_day_max_wh}Wh to accumulated total "
+                f"({total_counter_state['accumulated_wh']}Wh)"
+            )
+        elif current_daily_yield_wh > total_counter_state['day_max_wh']:
+            total_counter_state['day_max_wh'] = current_daily_yield_wh
+            state_changed = True
+
+        if state_changed:
+            save_total_counter_state(total_counter_state)
+
+        # Use the higher of current daily yield or day_max to prevent
+        # the total counter going backwards when inverters reset their
+        # daily counters at local midnight (before our server rollover).
+        effective_daily_yield_wh = max(
+            current_daily_yield_wh,
+            total_counter_state['day_max_wh']
+        )
+        total_emitted_yield_wh = (
+            baseline_wh
+            + total_counter_state['accumulated_wh']
+            + effective_daily_yield_wh
+        )
+        logging.debug(
+            f"Total emitted yield: baseline={baseline_wh}Wh, "
+            f"accumulated={total_counter_state['accumulated_wh']}Wh, "
+            f"today={current_daily_yield_wh}Wh, effective={effective_daily_yield_wh}Wh, "
+            f"emitted={total_emitted_yield_wh}Wh"
+        )
+
+        return {
+            'energy': current_daily_yield_wh,
+            'p1_yield': agg.get('p1_yield', 0),
+            'p2_yield': agg.get('p2_yield', 0),
+            'p3_yield': agg.get('p3_yield', 0),
+            'total_negative_active_energy': total_emitted_yield_wh / 1000
+        }
     
     # Define scheduled task that collects and sends data
     def scheduled_task() -> None:
         try:
             nonlocal total_counter_state
+            nonlocal snooze_frozen_payload
+            nonlocal snooze_was_active
 
             if is_snooze_time():
-                logging.debug("Snooze time active, skipping data collection.")
+                if not snooze_was_active:
+                    if snooze_frozen_payload is None:
+                        # If we enter snooze without prior live data (e.g. startup during snooze),
+                        # do one fresh read and freeze that snapshot for the whole snooze window.
+                        try:
+                            data_collection = collect_data()
+                            if 'aggregate' in data_collection:
+                                snooze_frozen_payload = build_payload_from_aggregate(data_collection['aggregate'])
+                                logging.info("Snooze entry snapshot captured from fresh device read.")
+                            else:
+                                snooze_frozen_payload = build_fallback_snooze_payload()
+                                logging.warning("Snooze entry snapshot unavailable from live data; using persisted fallback.")
+                        except Exception as e:
+                            snooze_frozen_payload = build_fallback_snooze_payload()
+                            logging.warning(
+                                f"Snooze entry fresh read failed ({e}); using persisted fallback snapshot."
+                            )
+                    logging.info("Snooze active: data reads paused, continuing packet transmission with frozen counters.")
+
+                frozen = snooze_frozen_payload
+                if frozen is None:
+                    frozen = build_fallback_snooze_payload()
+
+                send_emeter_packet(
+                    power=0,
+                    energy=int(frozen['energy']),
+                    p1_power=0,
+                    p1_yield=int(frozen['p1_yield']),
+                    p2_power=0,
+                    p2_yield=int(frozen['p2_yield']),
+                    p3_power=0,
+                    p3_yield=int(frozen['p3_yield']),
+                    total_negative_active_energy=float(frozen['total_negative_active_energy']),
+                    log_prefix='SNOOZE ACTIVE - '
+                )
+                snooze_was_active = True
                 return
+
+            if snooze_was_active:
+                logging.info("Snooze ended: resuming live data reads.")
+                snooze_was_active = False
 
             data_collection = collect_data()
             logging.debug(f"Data collection completed: {data_collection}")
@@ -559,68 +685,21 @@ def main() -> None:
             # Send the aggregated data as emeterPacket
             if 'aggregate' in data_collection:
                 agg = data_collection['aggregate']
-                current_date = _current_date()
-                current_daily_yield_wh = sanitize_daily_yield(
-                    agg.get('daily_yield', 0),
-                    'aggregate daily_yield'
-                )
-                current_daily_yield_wh = max(0, current_daily_yield_wh)
-                state_changed = False
-
-                # Midnight rollover: add previous day max once and start a fresh day.
-                # On the rollover cycle, discard the current daily yield reading
-                # because inverters may not have reset their daily counters yet,
-                # causing a stale reading to be captured as the new day's max.
-                if total_counter_state['date'] != current_date:
-                    previous_day = total_counter_state['date']
-                    previous_day_max_wh = total_counter_state['day_max_wh']
-                    total_counter_state['accumulated_wh'] += previous_day_max_wh
-                    total_counter_state['date'] = current_date
-                    total_counter_state['day_max_wh'] = 0
-                    state_changed = True
-                    current_daily_yield_wh = 0
-                    logging.info(
-                        f"Daily rollover {previous_day} -> {current_date}: "
-                        f"added {previous_day_max_wh}Wh to accumulated total "
-                        f"({total_counter_state['accumulated_wh']}Wh)"
-                    )
-                elif current_daily_yield_wh > total_counter_state['day_max_wh']:
-                    total_counter_state['day_max_wh'] = current_daily_yield_wh
-                    state_changed = True
-
-                if state_changed:
-                    save_total_counter_state(total_counter_state)
-
-                # Use the higher of current daily yield or day_max to prevent
-                # the total counter going backwards when inverters reset their
-                # daily counters at local midnight (before our server rollover).
-                effective_daily_yield_wh = max(
-                    current_daily_yield_wh,
-                    total_counter_state['day_max_wh']
-                )
-                total_emitted_yield_wh = (
-                    baseline_wh
-                    + total_counter_state['accumulated_wh']
-                    + effective_daily_yield_wh
-                )
-                logging.debug(
-                    f"Total emitted yield: baseline={baseline_wh}Wh, "
-                    f"accumulated={total_counter_state['accumulated_wh']}Wh, "
-                    f"today={current_daily_yield_wh}Wh, effective={effective_daily_yield_wh}Wh, "
-                    f"emitted={total_emitted_yield_wh}Wh"
-                )
+                payload = build_payload_from_aggregate(agg)
 
                 send_emeter_packet(
                     power=agg.get('total_power', 0),
-                    energy=current_daily_yield_wh,
+                    energy=int(payload['energy']),
                     p1_power=agg.get('p1_power', 0),
                     p1_yield=agg.get('p1_yield', 0),
                     p2_power=agg.get('p2_power', 0),
                     p2_yield=agg.get('p2_yield', 0),
                     p3_power=agg.get('p3_power', 0),
                     p3_yield=agg.get('p3_yield', 0),
-                    total_negative_active_energy=total_emitted_yield_wh / 1000
+                    total_negative_active_energy=float(payload['total_negative_active_energy'])
                 )
+
+                snooze_frozen_payload = payload
         except Exception as e:
             logging.error(f"Error in scheduled task: {e}")
     
