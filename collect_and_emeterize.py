@@ -15,7 +15,7 @@ import socket
 # Configure basic logging first, before any other operations
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='%(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler()
     ]
@@ -541,10 +541,7 @@ def _send_multicast(data: bytes, log_msg: str) -> None:
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, CONFIG['multicast']['ttl'])
         multicast_config = CONFIG['multicast']
         sock.sendto(data, (multicast_config['address'], multicast_config['port']))
-        logging.info(
-            f"Sent {len(data)} bytes to {multicast_config['address']}:{multicast_config['port']}: "
-            f"{log_msg}"
-        )
+        logging.info(f"Sent: {log_msg}")
     finally:
         sock.close()
 
@@ -560,8 +557,8 @@ def send_emeter_packet(power: int, energy: int, p1_power: int = 0, p1_yield: int
     )
     _send_multicast(data, (
         f"{log_prefix}"
-        f"Total power: {power}W | Daily energy arg: {energy}Wh | "
-        f"SMA_NEGATIVE_ACTIVE_ENERGY total: {total_negative_active_energy}kWh | "
+        f"current power: {power}W | Daily total: {energy}Wh | "
+        f"lifetime total: {total_negative_active_energy}kWh | "
         f"L1: {p1_power}W/{p1_yield}Wh | L2: {p2_power}W/{p2_yield}Wh | L3: {p3_power}W/{p3_yield}Wh"
     ))
 
