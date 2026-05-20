@@ -6,7 +6,7 @@ import asyncio
 import logging
 import json
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from pymodbus.client.sync import ModbusTcpClient
@@ -65,6 +65,9 @@ INVALID_DAILY_YIELD_VALUES = {65535}
 
 # After this many consecutive failed reads, a device's contribution is zeroed.
 STALE_DEVICE_TICK_LIMIT = 5
+
+# After stale limit, probe unreachable devices every N ticks to detect recovery.
+PROBE_INTERVAL_AFTER_STALE = 30
 
 # Update logging level from config if specified
 logging_config = CONFIG.get('logging', {})
@@ -274,6 +277,13 @@ def is_snooze_time() -> bool:
         return current_minutes >= start_minutes or current_minutes < end_minutes
 
 
+def _device_read_timeout_seconds() -> float:
+    """Upper bound for waiting on any single device read in a collection cycle."""
+    modbus_timeout = float(CONFIG.get('modbus', {}).get('timeout', 1))
+    speedwire_timeout = float(CONFIG.get('speedwire', {}).get('timeout', 1))
+    return max(modbus_timeout, speedwire_timeout) + 0.5
+
+
 def validate_configuration() -> None:
     """Validate device configuration at startup"""
     required_device_fields = {'type', 'name'}
@@ -422,6 +432,23 @@ class DeviceCollectionState:
     def __init__(self) -> None:
         self._devices: Dict[str, Dict[str, Any]] = {}
 
+    def should_probe(self, device_id: str) -> bool:
+        """Return False when a long-dead device can skip I/O until the next probe interval."""
+        entry = self._devices.get(device_id, {})
+        miss_ticks = int(entry.get('miss_ticks', 0))
+        if miss_ticks <= STALE_DEVICE_TICK_LIMIT:
+            return True
+        return miss_ticks % PROBE_INTERVAL_AFTER_STALE == 0
+
+    def contribution_without_probe(self, device_id: str) -> Dict[str, int]:
+        """Return last stale contribution or zero without incrementing miss count."""
+        entry = self._devices.get(device_id, {})
+        last_known: Optional[Dict[str, int]] = entry.get('last_known')
+        miss_ticks = int(entry.get('miss_ticks', 0))
+        if last_known is not None and miss_ticks <= STALE_DEVICE_TICK_LIMIT:
+            return last_known
+        return _zero_device_snapshot()
+
     def resolve_contribution(
         self, device_id: str, device_label: str, fresh: Optional[Dict[str, int]]
     ) -> Dict[str, int]:
@@ -494,18 +521,25 @@ def collect_data(device_state: DeviceCollectionState) -> Dict[str, Any]:
     """Collects data from all configured devices in parallel."""
     data_collection: Dict[str, Any] = {}
     worker_count = max(1, len(SMA_DEVICES))
+    read_timeout = _device_read_timeout_seconds()
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures: Dict[Any, Tuple[str, str]] = {}
         for device_id, device_info in SMA_DEVICES.items():
             device_label = f"device {device_id} ({device_info['name']})"
-            future = executor.submit(_collect_device_raw, device_id, device_info)
-            futures[future] = (device_id, device_label)
+            if device_state.should_probe(device_id):
+                future = executor.submit(_collect_device_raw, device_id, device_info)
+                futures[future] = (device_id, device_label)
+            else:
+                data_collection[device_id] = device_state.contribution_without_probe(device_id)
 
         for future in as_completed(futures):
             device_id, device_label = futures[future]
             try:
-                fresh = future.result()
+                fresh = future.result(timeout=read_timeout)
+            except FuturesTimeoutError:
+                logging.warning(f"{device_label}: read timed out after {read_timeout}s")
+                fresh = None
             except Exception as e:
                 logging.error(f"Error collecting data for {device_label}: {e}")
                 fresh = None
@@ -734,6 +768,8 @@ def main() -> None:
     except Exception as e:
         logging.error(f"Unable to persist initial total counter state: {e}")
         return
+
+    logging.getLogger('pymodbus').setLevel(logging.WARNING)
 
     logging.info("Starting SMA data aggregator and virtual emeter...")
 
