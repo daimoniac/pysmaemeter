@@ -103,7 +103,7 @@ Top-level keys:
 - `emeter`:
 	- `serial_number`: emulated meter serial
 	- `totalyieldbaseline`: baseline total yield in kWh
-- `modbus`: `base_ip`, `port`, `unit_id`, retry settings
+- `modbus`: `base_ip`, `port`, `unit_id`, `timeout` (seconds, default 1)
 - `speedwire`: query timeout
 - `scheduler`: send interval (`interval_seconds`)
 - `devices`: map of device IDs to `type` and `name`

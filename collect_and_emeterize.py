@@ -6,8 +6,9 @@ import asyncio
 import logging
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from pymodbus.client.sync import ModbusTcpClient
 from lib.emeter import emeterPacket
 import socket
@@ -61,6 +62,9 @@ SCALING_FACTORS = {
 
 # Some inverter firmwares intermittently report this sentinel as daily yield.
 INVALID_DAILY_YIELD_VALUES = {65535}
+
+# After this many consecutive failed reads, a device's contribution is zeroed.
+STALE_DEVICE_TICK_LIMIT = 5
 
 # Update logging level from config if specified
 logging_config = CONFIG.get('logging', {})
@@ -296,98 +300,84 @@ def validate_configuration() -> None:
     logging.info(f"Configuration validated: {len(SMA_DEVICES)} devices configured")
 
 
-async def get_speedwire_data() -> Dict[str, int]:
-    """Fetches Speedwire data with error handling and timeout"""
+async def get_speedwire_data() -> Optional[Dict[str, int]]:
+    """Fetches Speedwire data with error handling and timeout."""
     try:
         from lib.speedwire_multigate_asyncio import fetch_speedwire_data
-        data = await asyncio.wait_for(fetch_speedwire_data(), timeout=CONFIG['speedwire']['timeout'])
-        return data
+        return await asyncio.wait_for(fetch_speedwire_data(), timeout=CONFIG['speedwire']['timeout'])
     except asyncio.TimeoutError:
         logging.error("Timeout fetching Speedwire data")
-        return {'spotacpower': 0, 'tagesertrag': 0}
+        return None
     except Exception as e:
         logging.error(f"Error fetching Speedwire data: {e}")
-        return {'spotacpower': 0, 'tagesertrag': 0}
+        return None
 
 
-def get_values_persistent(ip_addr: str, sma_class: int, retries: Optional[int] = None) -> Optional[List[int]]:
+def read_modbus_values(ip_addr: str, sma_class: int) -> Optional[List[int]]:
     """
-    Reads the registers defined in 'REGISTERS[sma_class]' from the configured base IP.<ip_addr>
-    and returns a list of values in the exact register order. Uses retry logic.
+    Reads the registers defined in REGISTERS[sma_class] from base_ip.<ip_addr>.
 
-    Important: partial reads are treated as invalid to avoid shifted index mapping
+    Partial reads are treated as invalid to avoid shifted index mapping
     (e.g. daily_yield accidentally reading a phase-power register).
     """
     modbus_config = CONFIG['modbus']
-    effective_retries = retries if retries is not None else modbus_config['retries']
-
+    timeout = float(modbus_config.get('timeout', 1))
     register_order = REGISTERS[sma_class]
     unit_id = modbus_config['unit_id']
     host = f"{modbus_config['base_ip']}.{ip_addr}"
 
-    for attempt in range(effective_retries):
-        client = None
-        try:
-            client = ModbusTcpClient(host, port=modbus_config['port'])
-            if not client.connect():
-                raise ConnectionError(f"Connection to {host}:{modbus_config['port']} not possible")
+    client = None
+    try:
+        client = ModbusTcpClient(host, port=modbus_config['port'], timeout=timeout)
+        if not client.connect():
+            logging.warning(f"No reply from {host}:{modbus_config['port']}")
+            return None
 
-            register_values: Dict[int, int] = {}
-            failed_registers: List[int] = []
+        register_values: Dict[int, int] = {}
+        failed_registers: List[int] = []
 
-            for addr in register_order:
-                try:
-                    result = client.read_holding_registers(address=addr, count=2, unit=unit_id)
-                    if hasattr(result, 'isError') and result.isError():
-                        logging.warning(f"Skipping invalid register {addr} from {host}: {result}")
-                        failed_registers.append(addr)
-                        continue
-                    if not hasattr(result, 'registers'):
-                        logging.warning(f"Skipping register {addr} from {host}: Invalid response {result}")
-                        failed_registers.append(addr)
-                        continue
-
-                    register_values[addr] = int(result.registers[1])
-                    logging.debug(f"Reading register {addr} from {host} result: {register_values[addr]}")
-                except Exception as e:
-                    logging.warning(f"Skipping register {addr} from {host}: {e}")
+        for addr in register_order:
+            try:
+                result = client.read_holding_registers(address=addr, count=2, unit=unit_id)
+                if hasattr(result, 'isError') and result.isError():
+                    logging.warning(f"Invalid register {addr} from {host}: {result}")
+                    failed_registers.append(addr)
+                    continue
+                if not hasattr(result, 'registers'):
+                    logging.warning(f"Invalid response for register {addr} from {host}: {result}")
                     failed_registers.append(addr)
                     continue
 
-            if failed_registers:
-                raise Exception(
-                    f"Incomplete register set from {host}. Failed registers: {failed_registers}"
-                )
+                register_values[addr] = int(result.registers[1])
+                logging.debug(f"Reading register {addr} from {host} result: {register_values[addr]}")
+            except Exception as e:
+                logging.warning(f"Register {addr} from {host} failed: {e}")
+                failed_registers.append(addr)
+                continue
 
-            ordered_values = [register_values[addr] for addr in register_order]
-            logging.debug(f"Successfully read {len(ordered_values)} registers from {host}")
-            return ordered_values
-
-        except ConnectionError as e:
-            logging.warning(f"Attempt {attempt + 1}/{effective_retries} - Connection failed for {host}: {e}")
-            if attempt < effective_retries - 1:
-                time.sleep(modbus_config['retry_delay'])
-            continue
-
-        except Exception as e:
-            logging.error(f"Permanent error reading from {host}: {e}")
+        if failed_registers:
+            logging.warning(f"Incomplete register set from {host}: {failed_registers}")
             return None
 
-        finally:
-            if client:
-                client.close()
+        ordered_values = [register_values[addr] for addr in register_order]
+        logging.debug(f"Successfully read {len(ordered_values)} registers from {host}")
+        return ordered_values
 
-    logging.error(f"Failed to read from {host} after {effective_retries} attempts")
-    return None
+    except Exception as e:
+        logging.warning(f"No reply from {host}: {e}")
+        return None
+    finally:
+        if client:
+            client.close()
 
 
-def collect_speedwire_data_sync() -> Dict[str, int]:
-    """Synchronous wrapper function for Speedwire data collection"""
+def collect_speedwire_data_sync() -> Optional[Dict[str, int]]:
+    """Synchronous wrapper for Speedwire data collection."""
     try:
         return asyncio.run(get_speedwire_data())
     except Exception as e:
         logging.error(f"Error collecting Speedwire data: {e}")
-        return {'spotacpower': 0, 'tagesertrag': 0}
+        return None
 
 
 def _extract_phase_data(total_power: int, daily_yield: int, phase_power_data: Dict[str, int], device_label: str = '') -> Dict[str, int]:
@@ -412,50 +402,117 @@ def _extract_phase_data(total_power: int, daily_yield: int, phase_power_data: Di
     }
 
 
-def collect_data() -> Dict[str, Any]:
-    """Collects data from all configured devices"""
+def _zero_device_snapshot() -> Dict[str, int]:
+    """Returns a zeroed per-device contribution."""
+    return {
+        'total_power': 0,
+        'daily_yield': 0,
+        'p1_power': 0,
+        'p1_yield': 0,
+        'p2_power': 0,
+        'p2_yield': 0,
+        'p3_power': 0,
+        'p3_yield': 0,
+    }
+
+
+class DeviceCollectionState:
+    """Tracks last-known device readings and consecutive miss counts."""
+
+    def __init__(self) -> None:
+        self._devices: Dict[str, Dict[str, Any]] = {}
+
+    def resolve_contribution(
+        self, device_id: str, device_label: str, fresh: Optional[Dict[str, int]]
+    ) -> Dict[str, int]:
+        """Return fresh, stale last-known (up to STALE_DEVICE_TICK_LIMIT misses), or zeros."""
+        entry = self._devices.get(device_id, {})
+        last_known: Optional[Dict[str, int]] = entry.get('last_known')
+        miss_ticks: int = int(entry.get('miss_ticks', 0))
+
+        if fresh is not None:
+            self._devices[device_id] = {'last_known': fresh, 'miss_ticks': 0}
+            return fresh
+
+        miss_ticks += 1
+        if last_known is not None and miss_ticks <= STALE_DEVICE_TICK_LIMIT:
+            logging.info(
+                f"{device_label}: no reply, using last known power "
+                f"({miss_ticks}/{STALE_DEVICE_TICK_LIMIT})"
+            )
+            self._devices[device_id] = {'last_known': last_known, 'miss_ticks': miss_ticks}
+            return last_known
+
+        if last_known is not None:
+            logging.warning(
+                f"{device_label}: no reply, contributing 0 "
+                f"(miss {miss_ticks}, stale limit {STALE_DEVICE_TICK_LIMIT})"
+            )
+        else:
+            logging.warning(f"{device_label}: no reply and no last known value, contributing 0")
+
+        self._devices[device_id] = {'last_known': last_known, 'miss_ticks': miss_ticks}
+        return _zero_device_snapshot()
+
+
+def _collect_device_raw(device_id: str, device_info: Dict[str, Any]) -> Optional[Dict[str, int]]:
+    """Read one device; returns None when no reply was received."""
+    device_label = f"device {device_id} ({device_info['name']})"
+
+    if device_info['type'] == 8001:
+        data = read_modbus_values(device_id, device_info['type'])
+        if data is None:
+            return None
+
+        # Registers: [30773, 30961, 30775, 30535, 30777, 30779, 30781]
+        total_power = data[2]     # 30775: Total AC power
+        daily_yield = sanitize_daily_yield(data[3], device_label)
+        phase_power_data = {
+            'p1_power': data[4],  # 30777: Power L1
+            'p2_power': data[5],  # 30779: Power L2
+            'p3_power': data[6],  # 30781: Power L3
+        }
+    elif device_info['type'] == 9999:
+        data = collect_speedwire_data_sync()
+        if data is None:
+            return None
+        total_power = data.get('spotacpower', 0)
+        daily_yield = sanitize_daily_yield(data.get('tagesertrag', 0), device_label)
+        phase_power_data = data
+    else:
+        return None
+
+    phase_data = _extract_phase_data(total_power, daily_yield, phase_power_data, device_label)
+    return {
+        'total_power': total_power,
+        'daily_yield': daily_yield,
+        **phase_data,
+    }
+
+
+def collect_data(device_state: DeviceCollectionState) -> Dict[str, Any]:
+    """Collects data from all configured devices in parallel."""
     data_collection: Dict[str, Any] = {}
-    
-    for device_id, device_info in SMA_DEVICES.items():
-        try:
+    worker_count = max(1, len(SMA_DEVICES))
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures: Dict[Any, Tuple[str, str]] = {}
+        for device_id, device_info in SMA_DEVICES.items():
             device_label = f"device {device_id} ({device_info['name']})"
+            future = executor.submit(_collect_device_raw, device_id, device_info)
+            futures[future] = (device_id, device_label)
 
-            if device_info['type'] == 8001:
-                # Inverter data via Modbus
-                data = get_values_persistent(device_id, device_info['type'])
-                if data is None:
-                    logging.warning(f"No data from {device_label}")
-                    continue
-                
-                # Registers: [30773, 30961, 30775, 30535, 30777, 30779, 30781]
-                total_power = data[2]     # 30775: Total AC power
-                daily_yield = sanitize_daily_yield(data[3], device_label)
-                phase_power_data = {
-                    'p1_power': data[4],  # 30777: Power L1
-                    'p2_power': data[5],  # 30779: Power L2
-                    'p3_power': data[6]   # 30781: Power L3
-                }
+        for future in as_completed(futures):
+            device_id, device_label = futures[future]
+            try:
+                fresh = future.result()
+            except Exception as e:
+                logging.error(f"Error collecting data for {device_label}: {e}")
+                fresh = None
 
-            elif device_info['type'] == 9999:
-                # Speedwire data
-                data = collect_speedwire_data_sync()
-                total_power = data.get('spotacpower', 0)
-                daily_yield = sanitize_daily_yield(data.get('tagesertrag', 0), device_label)
-                phase_power_data = data
-
-            else:
-                continue
-
-            phase_data = _extract_phase_data(total_power, daily_yield, phase_power_data, device_label)
-            data_collection[device_id] = {
-                'total_power': total_power,
-                'daily_yield': daily_yield,
-                **phase_data
-            }
-
-        except Exception as e:
-            logging.error(f"Error collecting data for device {device_id}: {e}")
-            continue
+            data_collection[device_id] = device_state.resolve_contribution(
+                device_id, device_label, fresh
+            )
 
     # Calculate aggregate totals per phase
     aggregate = {}
@@ -562,6 +619,7 @@ class SchedulerState:
     def __init__(self, total_counter_state: Dict[str, Any], baseline_wh: int) -> None:
         self.total_counter_state = total_counter_state
         self.baseline_wh = baseline_wh
+        self.device_state = DeviceCollectionState()
         self.snooze_frozen_payload: Optional[Dict[str, Any]] = None
         self.snooze_was_active = False
 
@@ -602,7 +660,7 @@ class SchedulerState:
                 # If we enter snooze without prior live data (e.g. startup during snooze),
                 # do one fresh read and freeze that snapshot for the whole snooze window.
                 try:
-                    data_collection = collect_data()
+                    data_collection = collect_data(self.device_state)
                     if 'aggregate' in data_collection:
                         self.snooze_frozen_payload = self.build_payload_from_aggregate(data_collection['aggregate'])
                         logging.info("Snooze entry snapshot captured from fresh device read.")
@@ -634,7 +692,7 @@ class SchedulerState:
                 logging.info("Snooze ended: resuming live data reads.")
                 self.snooze_was_active = False
 
-            data_collection = collect_data()
+            data_collection = collect_data(self.device_state)
             logging.debug(f"Data collection completed: {data_collection}")
 
             if 'aggregate' in data_collection:
