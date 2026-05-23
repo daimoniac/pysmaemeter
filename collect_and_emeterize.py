@@ -320,6 +320,7 @@ def get_values_persistent(ip_addr: str, sma_class: int, retries: Optional[int] =
     """
     modbus_config = CONFIG['modbus']
     effective_retries = retries if retries is not None else modbus_config['retries']
+    timeout = float(modbus_config.get('timeout', 2))
 
     register_order = REGISTERS[sma_class]
     unit_id = modbus_config['unit_id']
@@ -328,7 +329,7 @@ def get_values_persistent(ip_addr: str, sma_class: int, retries: Optional[int] =
     for attempt in range(effective_retries):
         client = None
         try:
-            client = ModbusTcpClient(host, port=modbus_config['port'])
+            client = ModbusTcpClient(host, port=modbus_config['port'], timeout=timeout)
             if not client.connect():
                 raise ConnectionError(f"Connection to {host}:{modbus_config['port']} not possible")
 
