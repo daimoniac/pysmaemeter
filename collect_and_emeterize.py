@@ -62,6 +62,11 @@ SCALING_FACTORS = {
 # Some inverter firmwares intermittently report this sentinel as daily yield.
 INVALID_DAILY_YIELD_VALUES = {65535}
 
+# Power readings are instantaneous: after this many missed ticks we contribute 0W.
+# Daily yield is energy accumulated since midnight and is held until the next
+# successful read or the midnight rollover, whichever comes first.
+STALE_POWER_TICK_LIMIT = 5
+
 # Update logging level from config if specified
 logging_config = CONFIG.get('logging', {})
 if logging_config:
@@ -450,7 +455,12 @@ class DeviceCollectionState:
     def resolve_contribution(
         self, device_id: str, device_label: str, fresh: Optional[Dict[str, int]]
     ) -> Dict[str, int]:
-        """Return fresh data, or last-known values until the device replies again."""
+        """Return fresh data, or last-known values until the device replies again.
+
+        Power values are only stale-held for STALE_POWER_TICK_LIMIT ticks and
+        then zeroed (instantaneous reading). Daily-yield values are held until
+        the device replies again or the midnight rollover clears the cache.
+        """
         entry = self._devices.get(device_id, {})
         last_known: Optional[Dict[str, int]] = entry.get('last_known')
         miss_ticks: int = int(entry.get('miss_ticks', 0))
@@ -462,17 +472,30 @@ class DeviceCollectionState:
             return fresh
 
         miss_ticks += 1
-        if last_known is not None:
+        self._devices[device_id] = {'last_known': last_known, 'miss_ticks': miss_ticks}
+
+        if last_known is None:
+            logging.warning(f"{device_label}: no reply and no last known value, contributing 0")
+            return _zero_device_snapshot()
+
+        contribution = dict(last_known)
+        if miss_ticks > STALE_POWER_TICK_LIMIT:
+            if miss_ticks == STALE_POWER_TICK_LIMIT + 1:
+                logging.warning(
+                    f"{device_label}: power stale after {STALE_POWER_TICK_LIMIT} ticks, "
+                    f"zeroing power; holding daily yield until midnight"
+                )
+            for key in ('total_power', 'p1_power', 'p2_power', 'p3_power'):
+                contribution[key] = 0
+        else:
             if miss_ticks == 1:
                 logging.info(f"{device_label}: no reply, using last known values")
             else:
-                logging.debug(f"{device_label}: no reply, still using last known values ({miss_ticks} ticks)")
-            self._devices[device_id] = {'last_known': last_known, 'miss_ticks': miss_ticks}
-            return last_known
-
-        logging.warning(f"{device_label}: no reply and no last known value, contributing 0")
-        self._devices[device_id] = {'last_known': None, 'miss_ticks': miss_ticks}
-        return _zero_device_snapshot()
+                logging.debug(
+                    f"{device_label}: no reply, still using last known values "
+                    f"({miss_ticks}/{STALE_POWER_TICK_LIMIT})"
+                )
+        return contribution
 
 
 def _collect_device_raw(device_id: str, device_info: Dict[str, Any]) -> Optional[Dict[str, int]]:
