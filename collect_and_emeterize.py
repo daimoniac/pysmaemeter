@@ -318,73 +318,68 @@ async def get_speedwire_data() -> Optional[Dict[str, int]]:
 def get_values_persistent(ip_addr: str, sma_class: int, retries: Optional[int] = None) -> Optional[List[int]]:
     """
     Reads the registers defined in 'REGISTERS[sma_class]' from the configured base IP.<ip_addr>
-    and returns a list of values in the exact register order. Uses retry logic.
+    and returns a list of values in the exact register order.
+
+    A single read attempt is made per call; transient failures are tolerated by
+    the tick-based logic in DeviceCollectionState instead of an inner retry loop.
 
     Important: partial reads are treated as invalid to avoid shifted index mapping
     (e.g. daily_yield accidentally reading a phase-power register).
     """
     modbus_config = CONFIG['modbus']
-    effective_retries = retries if retries is not None else modbus_config['retries']
     timeout = float(modbus_config.get('timeout', 2))
 
     register_order = REGISTERS[sma_class]
     unit_id = modbus_config['unit_id']
     host = f"{modbus_config['base_ip']}.{ip_addr}"
 
-    for attempt in range(effective_retries):
-        client = None
-        try:
-            client = ModbusTcpClient(host, port=modbus_config['port'], timeout=timeout)
-            if not client.connect():
-                raise ConnectionError(f"Connection to {host}:{modbus_config['port']} not possible")
+    client = None
+    try:
+        client = ModbusTcpClient(host, port=modbus_config['port'], timeout=timeout)
+        if not client.connect():
+            raise ConnectionError(f"Connection to {host}:{modbus_config['port']} not possible")
 
-            register_values: Dict[int, int] = {}
-            failed_registers: List[int] = []
+        register_values: Dict[int, int] = {}
+        failed_registers: List[int] = []
 
-            for addr in register_order:
-                try:
-                    result = client.read_holding_registers(address=addr, count=2, unit=unit_id)
-                    if hasattr(result, 'isError') and result.isError():
-                        logging.warning(f"Skipping invalid register {addr} from {host}: {result}")
-                        failed_registers.append(addr)
-                        continue
-                    if not hasattr(result, 'registers'):
-                        logging.warning(f"Skipping register {addr} from {host}: Invalid response {result}")
-                        failed_registers.append(addr)
-                        continue
-
-                    register_values[addr] = int(result.registers[1])
-                    logging.debug(f"Reading register {addr} from {host} result: {register_values[addr]}")
-                except Exception as e:
-                    logging.warning(f"Skipping register {addr} from {host}: {e}")
+        for addr in register_order:
+            try:
+                result = client.read_holding_registers(address=addr, count=2, unit=unit_id)
+                if hasattr(result, 'isError') and result.isError():
+                    logging.warning(f"Skipping invalid register {addr} from {host}: {result}")
+                    failed_registers.append(addr)
+                    continue
+                if not hasattr(result, 'registers'):
+                    logging.warning(f"Skipping register {addr} from {host}: Invalid response {result}")
                     failed_registers.append(addr)
                     continue
 
-            if failed_registers:
-                raise Exception(
-                    f"Incomplete register set from {host}. Failed registers: {failed_registers}"
-                )
+                register_values[addr] = int(result.registers[1])
+                logging.debug(f"Reading register {addr} from {host} result: {register_values[addr]}")
+            except Exception as e:
+                logging.warning(f"Skipping register {addr} from {host}: {e}")
+                failed_registers.append(addr)
+                continue
 
-            ordered_values = [register_values[addr] for addr in register_order]
-            logging.debug(f"Successfully read {len(ordered_values)} registers from {host}")
-            return ordered_values
-
-        except ConnectionError as e:
-            logging.warning(f"Attempt {attempt + 1}/{effective_retries} - Connection failed for {host}: {e}")
-            if attempt < effective_retries - 1:
-                time.sleep(modbus_config['retry_delay'])
-            continue
-
-        except Exception as e:
-            logging.error(f"Permanent error reading from {host}: {e}")
+        if failed_registers:
+            logging.warning(f"Incomplete register set from {host}. Failed registers: {failed_registers}")
             return None
 
-        finally:
-            if client:
-                client.close()
+        ordered_values = [register_values[addr] for addr in register_order]
+        logging.debug(f"Successfully read {len(ordered_values)} registers from {host}")
+        return ordered_values
 
-    logging.error(f"Failed to read from {host} after {effective_retries} attempts")
-    return None
+    except ConnectionError as e:
+        logging.warning(f"Connection failed for {host}: {e}")
+        return None
+
+    except Exception as e:
+        logging.error(f"Permanent error reading from {host}: {e}")
+        return None
+
+    finally:
+        if client:
+            client.close()
 
 
 def collect_speedwire_data_sync() -> Optional[Dict[str, int]]:
