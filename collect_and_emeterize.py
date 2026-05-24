@@ -421,10 +421,13 @@ def _extract_phase_data(total_power: int, daily_yield: int, phase_power_data: Di
 
 
 def _zero_device_snapshot() -> Dict[str, int]:
-    """Returns a zeroed per-device contribution."""
+    """Returns a zeroed per-device contribution.
+
+    Only per-phase values are tracked: the aggregate sums them into
+    overall total_power and daily_yield, so storing duplicates here would
+    just diverge.
+    """
     return {
-        'total_power': 0,
-        'daily_yield': 0,
         'p1_power': 0,
         'p1_yield': 0,
         'p2_power': 0,
@@ -487,7 +490,7 @@ class DeviceCollectionState:
                     f"{device_label}: power stale after {STALE_POWER_TICK_LIMIT} ticks, "
                     f"zeroing power; holding daily yield until midnight"
                 )
-            for key in ('total_power', 'p1_power', 'p2_power', 'p3_power'):
+            for key in ('p1_power', 'p2_power', 'p3_power'):
                 contribution[key] = 0
         else:
             if miss_ticks == 1:
@@ -527,12 +530,7 @@ def _collect_device_raw(device_id: str, device_info: Dict[str, Any]) -> Optional
     else:
         return None
 
-    phase_data = _extract_phase_data(total_power, daily_yield, phase_power_data, device_label)
-    return {
-        'total_power': total_power,
-        'daily_yield': daily_yield,
-        **phase_data,
-    }
+    return _extract_phase_data(total_power, daily_yield, phase_power_data, device_label)
 
 
 def collect_data(device_state: DeviceCollectionState) -> Dict[str, Any]:
