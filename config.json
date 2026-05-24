@@ -16,9 +16,9 @@
     "base_ip": "192.168.10",
     "port": 502,
     "unit_id": 3,
-    "retries": 3,
-    "retry_delay": 1,
-    "timeout": 2
+    "retries": 1,
+    "retry_delay": 0,
+    "timeout": 1
   },
   "speedwire": {
     "timeout": 2
