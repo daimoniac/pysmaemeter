@@ -5,7 +5,7 @@ Python toolkit for speaking the SMA Energy Meter protocol.
 This repository has two main purposes:
 
 1. `lib/emeter.py`: a reusable Python library that builds valid SMA Energy Meter multicast packets.
-2. `collect_and_emeterize.py`: an extendable runtime that collects readings from multiple sources and publishes them as one virtual SMA Energy Meter.
+2. `sma_emeter/` + `collect_and_emeterize.py`: an extendable runtime that collects readings from multiple sources and publishes them as one virtual SMA Energy Meter.
 
 The packet implementation is based on historical `emeter.py` work from the deprecated Home Assistant emulator project:
 https://github.com/Roeland54/SMA-Energy-Meter-emulator
@@ -22,7 +22,8 @@ https://github.com/Roeland54/SMA-Energy-Meter-emulator
 
 - `lib/emeter.py`: core packet builder (`emeterPacket`) and SMA measurement IDs.
 - `lib/speedwire_multigate_asyncio.py`: async Speedwire query client helper.
-- `collect_and_emeterize.py`: collector + aggregator + multicast publisher.
+- `sma_emeter/`: collector, aggregator, Modbus/Speedwire clients, scheduler, and multicast publisher.
+- `collect_and_emeterize.py`: thin entry point for the runtime service.
 - `send_packet.py`: one-shot packet sender for quick verification.
 - `config.json`: runtime configuration (devices, multicast, scheduler, Modbus, logging).
 - `tests/test_emeter.py`: unit tests for packet encoding primitives and sizing behavior.
@@ -32,7 +33,7 @@ https://github.com/Roeland54/SMA-Energy-Meter-emulator
 
 Prerequisites:
 
-- Python 3.8+
+- Python 3.9+ (uses modern `list[...]` / `tuple[...]` type annotations)
 - pip
 
 Install:
@@ -48,7 +49,6 @@ pip install -r requirements.txt
 Current runtime dependencies:
 
 - `pymodbus==2.5.3`
-- `schedule==1.2.0`
 
 ## Usage
 
@@ -133,7 +133,7 @@ data = packet.getData()[:packet.getLength()]
 Run unit tests:
 
 ```bash
-python3 tests/test_emeter.py
+python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
 For packet-level verification against external tooling, you can inspect emitted multicast packets with:
