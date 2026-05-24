@@ -4,9 +4,6 @@ from typing import Dict, Optional
 
 from sma_emeter.config import CONFIG
 
-_DEFAULT_SPEEDWIRE = {'spotacpower': 0, 'tagesertrag': 0}
-
-
 class SpeedwireCollector:
     """Speedwire fetcher with a reused asyncio event loop."""
 
@@ -24,17 +21,17 @@ class SpeedwireCollector:
 
         return await asyncio.wait_for(fetch_speedwire_data(), timeout=self._timeout)
 
-    def fetch(self) -> Dict[str, int]:
+    def fetch(self) -> Optional[Dict[str, int]]:
         loop = self._ensure_loop()
         asyncio.set_event_loop(loop)
         try:
             return loop.run_until_complete(self._fetch_async())
         except asyncio.TimeoutError:
             logging.error("Timeout fetching Speedwire data")
-            return dict(_DEFAULT_SPEEDWIRE)
+            return None
         except Exception:
             logging.exception("Error fetching Speedwire data")
-            return dict(_DEFAULT_SPEEDWIRE)
+            return None
 
     def close(self) -> None:
         if self._loop and not self._loop.is_closed():

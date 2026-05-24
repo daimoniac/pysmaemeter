@@ -1,7 +1,7 @@
 {
   "logging": {
     "level": "INFO",
-    "format": "%(asctime)s - %(levelname)s - %(message)s"
+    "format": "%(levelname)s - %(message)s"
   },
   "multicast": {
     "address": "239.12.255.254",

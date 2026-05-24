@@ -3,6 +3,7 @@ import time
 from typing import Any, Dict, Optional
 
 from sma_emeter.aggregator import collect_data
+from sma_emeter.device_state import DeviceCollectionState
 from sma_emeter.phase_data import distribute_phase_values
 from sma_emeter.config import CONFIG
 from sma_emeter.emeter_packet import MulticastSender, send_emeter_packet
@@ -34,6 +35,7 @@ class SchedulerState:
         self.modbus_pool = modbus_pool
         self.speedwire = speedwire
         self.sender = sender
+        self.device_state = DeviceCollectionState()
         self.snooze_frozen_payload: Optional[EmeterPayload] = None
         self.snooze_was_active = False
 
@@ -76,7 +78,9 @@ class SchedulerState:
         if not self.snooze_was_active:
             if self.snooze_frozen_payload is None:
                 try:
-                    data_collection = collect_data(self.modbus_pool, self.speedwire)
+                    data_collection = collect_data(
+                        self.modbus_pool, self.speedwire, self.device_state
+                    )
                     if 'aggregate' in data_collection:
                         self.snooze_frozen_payload = self.build_payload_from_aggregate(
                             data_collection['aggregate']
@@ -122,7 +126,9 @@ class SchedulerState:
                 logging.info("Snooze ended: resuming live data reads.")
                 self.snooze_was_active = False
 
-            data_collection = collect_data(self.modbus_pool, self.speedwire)
+            data_collection = collect_data(
+                self.modbus_pool, self.speedwire, self.device_state
+            )
             logging.debug("Data collection completed: %s", data_collection)
 
             if 'aggregate' not in data_collection:
