@@ -21,6 +21,11 @@ logging.basicConfig(
     ]
 )
 
+# pymodbus logs every connect timeout at ERROR which duplicates the tick-level
+# "no reply, using last known values" message from DeviceCollectionState.
+# Silence its library noise; failures still surface through our own logs.
+logging.getLogger('pymodbus').setLevel(logging.CRITICAL)
+
 # Load configuration from config.json
 def load_config() -> Dict[str, Any]:
     """Load configuration from config.json file"""
@@ -370,7 +375,9 @@ def get_values_persistent(ip_addr: str, sma_class: int) -> Optional[List[int]]:
         return ordered_values
 
     except ConnectionError as e:
-        logging.warning(f"Connection failed for {host}: {e}")
+        # DeviceCollectionState emits the canonical user-facing "no reply"
+        # line at INFO. Keep the connect-error reason at DEBUG for diagnosis.
+        logging.debug(f"Connection failed for {host}: {e}")
         return None
 
     except Exception as e:
