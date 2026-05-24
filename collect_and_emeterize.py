@@ -413,53 +413,105 @@ def _extract_phase_data(total_power: int, daily_yield: int, phase_power_data: Di
     }
 
 
-def collect_data() -> Dict[str, Any]:
+def _zero_device_snapshot() -> Dict[str, int]:
+    """Returns a zeroed per-device contribution."""
+    return {
+        'total_power': 0,
+        'daily_yield': 0,
+        'p1_power': 0,
+        'p1_yield': 0,
+        'p2_power': 0,
+        'p2_yield': 0,
+        'p3_power': 0,
+        'p3_yield': 0,
+    }
+
+
+class DeviceCollectionState:
+    """Tracks last-known device readings and consecutive miss counts."""
+
+    def __init__(self) -> None:
+        self._devices: Dict[str, Dict[str, Any]] = {}
+
+    def resolve_contribution(
+        self, device_id: str, device_label: str, fresh: Optional[Dict[str, int]]
+    ) -> Dict[str, int]:
+        """Return fresh data, or last-known values until the device replies again."""
+        entry = self._devices.get(device_id, {})
+        last_known: Optional[Dict[str, int]] = entry.get('last_known')
+        miss_ticks: int = int(entry.get('miss_ticks', 0))
+
+        if fresh is not None:
+            if miss_ticks > 0:
+                logging.info(f"{device_label}: reply restored after {miss_ticks} missed tick(s)")
+            self._devices[device_id] = {'last_known': fresh, 'miss_ticks': 0}
+            return fresh
+
+        miss_ticks += 1
+        if last_known is not None:
+            if miss_ticks == 1:
+                logging.info(f"{device_label}: no reply, using last known values")
+            else:
+                logging.debug(f"{device_label}: no reply, still using last known values ({miss_ticks} ticks)")
+            self._devices[device_id] = {'last_known': last_known, 'miss_ticks': miss_ticks}
+            return last_known
+
+        logging.warning(f"{device_label}: no reply and no last known value, contributing 0")
+        self._devices[device_id] = {'last_known': None, 'miss_ticks': miss_ticks}
+        return _zero_device_snapshot()
+
+
+def _collect_device_raw(device_id: str, device_info: Dict[str, Any]) -> Optional[Dict[str, int]]:
+    """Read one device; returns None when no reply was received."""
+    device_label = f"device {device_id} ({device_info['name']})"
+
+    if device_info['type'] == 8001:
+        data = get_values_persistent(device_id, device_info['type'])
+        if data is None:
+            return None
+
+        # Registers: [30773, 30961, 30775, 30535, 30777, 30779, 30781]
+        total_power = data[2]     # 30775: Total AC power
+        daily_yield = sanitize_daily_yield(data[3], device_label)
+        phase_power_data = {
+            'p1_power': data[4],  # 30777: Power L1
+            'p2_power': data[5],  # 30779: Power L2
+            'p3_power': data[6],  # 30781: Power L3
+        }
+    elif device_info['type'] == 9999:
+        data = collect_speedwire_data_sync()
+        if data is None:
+            return None
+        total_power = data.get('spotacpower', 0)
+        daily_yield = sanitize_daily_yield(data.get('tagesertrag', 0), device_label)
+        phase_power_data = data
+    else:
+        return None
+
+    phase_data = _extract_phase_data(total_power, daily_yield, phase_power_data, device_label)
+    return {
+        'total_power': total_power,
+        'daily_yield': daily_yield,
+        **phase_data,
+    }
+
+
+def collect_data(device_state: DeviceCollectionState) -> Dict[str, Any]:
     """Collects data from all configured devices"""
     data_collection: Dict[str, Any] = {}
-    
+
     for device_id, device_info in SMA_DEVICES.items():
         try:
             device_label = f"device {device_id} ({device_info['name']})"
-
-            if device_info['type'] == 8001:
-                # Inverter data via Modbus
-                data = get_values_persistent(device_id, device_info['type'])
-                if data is None:
-                    logging.warning(f"No data from {device_label}")
-                    continue
-                
-                # Registers: [30773, 30961, 30775, 30535, 30777, 30779, 30781]
-                total_power = data[2]     # 30775: Total AC power
-                daily_yield = sanitize_daily_yield(data[3], device_label)
-                phase_power_data = {
-                    'p1_power': data[4],  # 30777: Power L1
-                    'p2_power': data[5],  # 30779: Power L2
-                    'p3_power': data[6]   # 30781: Power L3
-                }
-
-            elif device_info['type'] == 9999:
-                # Speedwire data
-                data = collect_speedwire_data_sync()
-                if data is None:
-                    logging.warning(f"No data from {device_label}")
-                    continue
-                total_power = data.get('spotacpower', 0)
-                daily_yield = sanitize_daily_yield(data.get('tagesertrag', 0), device_label)
-                phase_power_data = data
-
-            else:
-                continue
-
-            phase_data = _extract_phase_data(total_power, daily_yield, phase_power_data, device_label)
-            data_collection[device_id] = {
-                'total_power': total_power,
-                'daily_yield': daily_yield,
-                **phase_data
-            }
-
+            fresh = _collect_device_raw(device_id, device_info)
+            data_collection[device_id] = device_state.resolve_contribution(
+                device_id, device_label, fresh
+            )
         except Exception as e:
             logging.error(f"Error collecting data for device {device_id}: {e}")
-            continue
+            data_collection[device_id] = device_state.resolve_contribution(
+                device_id, f"device {device_id} ({device_info['name']})", None
+            )
 
     # Calculate aggregate totals per phase
     aggregate = {}
@@ -566,6 +618,7 @@ class SchedulerState:
     def __init__(self, total_counter_state: Dict[str, Any], baseline_wh: int) -> None:
         self.total_counter_state = total_counter_state
         self.baseline_wh = baseline_wh
+        self.device_state = DeviceCollectionState()
         self.snooze_frozen_payload: Optional[Dict[str, Any]] = None
         self.snooze_was_active = False
 
@@ -606,7 +659,7 @@ class SchedulerState:
                 # If we enter snooze without prior live data (e.g. startup during snooze),
                 # do one fresh read and freeze that snapshot for the whole snooze window.
                 try:
-                    data_collection = collect_data()
+                    data_collection = collect_data(self.device_state)
                     if 'aggregate' in data_collection:
                         self.snooze_frozen_payload = self.build_payload_from_aggregate(data_collection['aggregate'])
                         logging.info("Snooze entry snapshot captured from fresh device read.")
@@ -638,7 +691,7 @@ class SchedulerState:
                 logging.info("Snooze ended: resuming live data reads.")
                 self.snooze_was_active = False
 
-            data_collection = collect_data()
+            data_collection = collect_data(self.device_state)
             logging.debug(f"Data collection completed: {data_collection}")
 
             if 'aggregate' in data_collection:
