@@ -296,18 +296,18 @@ def validate_configuration() -> None:
     logging.info(f"Configuration validated: {len(SMA_DEVICES)} devices configured")
 
 
-async def get_speedwire_data() -> Dict[str, int]:
+async def get_speedwire_data() -> Optional[Dict[str, int]]:
     """Fetches Speedwire data with error handling and timeout"""
     try:
         from lib.speedwire_multigate_asyncio import fetch_speedwire_data
-        data = await asyncio.wait_for(fetch_speedwire_data(), timeout=CONFIG['speedwire']['timeout'])
-        return data
+        timeout = float(CONFIG['speedwire'].get('timeout', 2))
+        return await fetch_speedwire_data(timeout=timeout)
     except asyncio.TimeoutError:
         logging.error("Timeout fetching Speedwire data")
-        return {'spotacpower': 0, 'tagesertrag': 0}
+        return None
     except Exception as e:
         logging.error(f"Error fetching Speedwire data: {e}")
-        return {'spotacpower': 0, 'tagesertrag': 0}
+        return None
 
 
 def get_values_persistent(ip_addr: str, sma_class: int, retries: Optional[int] = None) -> Optional[List[int]]:
@@ -382,13 +382,13 @@ def get_values_persistent(ip_addr: str, sma_class: int, retries: Optional[int] =
     return None
 
 
-def collect_speedwire_data_sync() -> Dict[str, int]:
+def collect_speedwire_data_sync() -> Optional[Dict[str, int]]:
     """Synchronous wrapper function for Speedwire data collection"""
     try:
         return asyncio.run(get_speedwire_data())
     except Exception as e:
         logging.error(f"Error collecting Speedwire data: {e}")
-        return {'spotacpower': 0, 'tagesertrag': 0}
+        return None
 
 
 def _extract_phase_data(total_power: int, daily_yield: int, phase_power_data: Dict[str, int], device_label: str = '') -> Dict[str, int]:
@@ -440,6 +440,9 @@ def collect_data() -> Dict[str, Any]:
             elif device_info['type'] == 9999:
                 # Speedwire data
                 data = collect_speedwire_data_sync()
+                if data is None:
+                    logging.warning(f"No data from {device_label}")
+                    continue
                 total_power = data.get('spotacpower', 0)
                 daily_yield = sanitize_daily_yield(data.get('tagesertrag', 0), device_label)
                 phase_power_data = data

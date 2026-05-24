@@ -21,7 +21,7 @@
     "timeout": 2
   },
   "speedwire": {
-    "timeout": 10.0
+    "timeout": 2
   },
   "scheduler": {
     "interval_seconds": 1
