@@ -432,6 +432,20 @@ class DeviceCollectionState:
 
     def __init__(self) -> None:
         self._devices: Dict[str, Dict[str, Any]] = {}
+        self._date: str = _current_date()
+
+    def ensure_current_day(self) -> None:
+        """Drop cached readings when the local date changes (midnight rollover)."""
+        current_date = _current_date()
+        if self._date == current_date:
+            return
+        if self._devices:
+            logging.info(
+                f"Daily rollover {self._date} -> {current_date}: "
+                f"cleared last-known readings for {len(self._devices)} device(s)"
+            )
+        self._devices.clear()
+        self._date = current_date
 
     def resolve_contribution(
         self, device_id: str, device_label: str, fresh: Optional[Dict[str, int]]
@@ -498,6 +512,7 @@ def _collect_device_raw(device_id: str, device_info: Dict[str, Any]) -> Optional
 
 def collect_data(device_state: DeviceCollectionState) -> Dict[str, Any]:
     """Collects data from all configured devices"""
+    device_state.ensure_current_day()
     data_collection: Dict[str, Any] = {}
 
     for device_id, device_info in SMA_DEVICES.items():
