@@ -399,7 +399,12 @@ def collect_speedwire_data_sync() -> Optional[Dict[str, int]]:
 
 
 def _extract_phase_data(total_power: int, daily_yield: int, phase_power_data: Dict[str, int], device_label: str = '') -> Dict[str, int]:
-    """Extract and calculate phase data from raw device data."""
+    """Extract and calculate phase data from raw device data.
+
+    Phase yields are either supplied pre-derived (Speedwire splits the
+    already-sanitized total) or computed from the sanitized daily_yield via
+    distribute_phase_values, so per-phase sanitization is unnecessary here.
+    """
     # Get phase powers (with fallback to equal distribution)
     p1_power = phase_power_data.get('p1_power', 0) or total_power // 3
     p2_power = phase_power_data.get('p2_power', 0) or total_power // 3
@@ -407,9 +412,9 @@ def _extract_phase_data(total_power: int, daily_yield: int, phase_power_data: Di
 
     # Get phase yields (calculate if not provided)
     if all(phase_power_data.get(f'p{i}_yield') is not None for i in [1, 2, 3]):
-        p1_yield = sanitize_daily_yield(phase_power_data['p1_yield'], f"{device_label} p1_yield")
-        p2_yield = sanitize_daily_yield(phase_power_data['p2_yield'], f"{device_label} p2_yield")
-        p3_yield = sanitize_daily_yield(phase_power_data['p3_yield'], f"{device_label} p3_yield")
+        p1_yield = int(phase_power_data['p1_yield'])
+        p2_yield = int(phase_power_data['p2_yield'])
+        p3_yield = int(phase_power_data['p3_yield'])
     else:
         p1_yield, p2_yield, p3_yield = distribute_phase_values(daily_yield, p1_power, p2_power, p3_power)
 
