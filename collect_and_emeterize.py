@@ -315,7 +315,7 @@ async def get_speedwire_data() -> Optional[Dict[str, int]]:
         return None
 
 
-def get_values_persistent(ip_addr: str, sma_class: int, retries: Optional[int] = None) -> Optional[List[int]]:
+def get_values_persistent(ip_addr: str, sma_class: int) -> Optional[List[int]]:
     """
     Reads the registers defined in 'REGISTERS[sma_class]' from the configured base IP.<ip_addr>
     and returns a list of values in the exact register order.
