@@ -82,17 +82,18 @@ class SpeedwireClient:
     def get_long_value_at(self, data, index):
         return unpack('I', data[index:index + 4])[0]
 
-    async def get_speedwire_data(self):
-        transport, protocol = await self.loop.create_datagram_endpoint(
+    async def get_speedwire_data(self, timeout: float = 2.0):
+        transport, _protocol = await self.loop.create_datagram_endpoint(
             lambda: self,
             local_addr=("0.0.0.0", 0)
         )
-        await self.response_future
-        transport.close()
-        return self.sma_data
+        try:
+            await asyncio.wait_for(self.response_future, timeout=timeout)
+            return self.sma_data
+        finally:
+            transport.close()
 
-async def fetch_speedwire_data():
+async def fetch_speedwire_data(timeout: float = 2.0):
     loop = asyncio.get_event_loop()
     client = SpeedwireClient(loop)
-    data = await client.get_speedwire_data()
-    return data
+    return await client.get_speedwire_data(timeout=timeout)
