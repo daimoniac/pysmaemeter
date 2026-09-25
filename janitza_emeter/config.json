@@ -11,7 +11,7 @@
   },
   "emeter": {
     "serial_number": 1901444595,
-    "invert_direction": false
+    "invert_direction": true
   },
   "multicast": {
     "address": "239.12.255.254",
