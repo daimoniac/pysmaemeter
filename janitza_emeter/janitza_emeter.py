@@ -10,8 +10,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pymodbus.client.sync import ModbusTcpClient
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -30,6 +28,7 @@ try:
         apply_invert,
         snapshot_from_registers,
     )
+    from modbus_tcp import StdlibModbusTcpClient
 except ImportError:
     from janitza_emeter.mapping import (
         GridSnapshot,
@@ -40,8 +39,7 @@ except ImportError:
         apply_invert,
         snapshot_from_registers,
     )
-
-logging.getLogger('pymodbus').setLevel(logging.CRITICAL)
+    from janitza_emeter.modbus_tcp import StdlibModbusTcpClient
 
 CONFIG_PATH = Path(__file__).resolve().parent / 'config.json'
 
@@ -115,44 +113,18 @@ def build_packet(serial_number: int, snapshot: GridSnapshot) -> bytes:
 
 class JanitzaModbus:
     def __init__(self, host: str, port: int, unit_id: int, timeout: float) -> None:
-        self.host = host
-        self.port = int(port)
-        self.unit_id = int(unit_id)
-        self.timeout = float(timeout)
-        self._client: Optional[ModbusTcpClient] = None
+        self._client = StdlibModbusTcpClient(host, port, unit_id, timeout)
 
     def close(self) -> None:
-        if self._client is not None:
-            try:
-                self._client.close()
-            except Exception:
-                pass
-            self._client = None
-
-    def _connect(self) -> ModbusTcpClient:
-        if self._client is not None:
-            return self._client
-        client = ModbusTcpClient(self.host, port=self.port, timeout=self.timeout)
-        if not client.connect():
-            raise ConnectionError(f"Connection to {self.host}:{self.port} not possible")
-        self._client = client
-        return client
+        self._client.close()
 
     def read_registers(self) -> List[int]:
-        try:
-            client = self._connect()
-            result = client.read_holding_registers(REG_START, REG_COUNT, unit=self.unit_id)
-            if result is None or result.isError():
-                raise ConnectionError(f"Modbus read failed: {result}")
-            registers = list(result.registers)
-            if len(registers) < REG_COUNT:
-                raise ConnectionError(
-                    f"Modbus short read: expected {REG_COUNT}, got {len(registers)}"
-                )
-            return registers
-        except Exception:
-            self.close()
-            raise
+        registers = self._client.read_holding_registers(REG_START, REG_COUNT)
+        if len(registers) < REG_COUNT:
+            raise ConnectionError(
+                f"Modbus short read: expected {REG_COUNT}, got {len(registers)}"
+            )
+        return registers
 
 
 def _snapshot_log_line(snapshot: GridSnapshot, prefix: str = '') -> str:
