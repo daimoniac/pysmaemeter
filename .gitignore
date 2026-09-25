@@ -1,5 +1,6 @@
 remote_sshfs
 total_counter.json
+collect_and_emeterize/total_counter.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

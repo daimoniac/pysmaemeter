@@ -1,0 +1,25 @@
+{
+  "logging": {
+    "level": "INFO",
+    "format": "%(asctime)s - %(levelname)s - %(message)s"
+  },
+  "modbus": {
+    "host": "192.168.10.223",
+    "port": 502,
+    "unit_id": 1,
+    "timeout": 1
+  },
+  "emeter": {
+    "serial_number": 1901444595,
+    "invert_direction": false
+  },
+  "multicast": {
+    "address": "239.12.255.254",
+    "port": 9522,
+    "ttl": 32
+  },
+  "scheduler": {
+    "interval_seconds": 1,
+    "hold_ticks": 5
+  }
+}

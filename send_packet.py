@@ -1,7 +1,7 @@
-import socket
 import time
 import argparse
 from lib.emeter import emeterPacket
+from lib.multicast import send_udp_multicast
 
 # Multicast address and port (SMA default)
 DEFAULT_UDP_ADDRESS: str = '239.12.255.254'
@@ -61,14 +61,7 @@ def main() -> None:
     # Retrieve the raw packet data
     data = packet.getData()[:packet.getLength()]
 
-    # Create a UDP socket for sending the packet
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-
-    # Set the time-to-live for multicast packets
-    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, DEFAULT_TTL)
-
-    # Send the packet data to the multicast address and port
-    sock.sendto(data, (args.address, args.port))
+    send_udp_multicast(data, args.address, args.port, DEFAULT_TTL)
     print(f"Sent {len(data)} bytes to {args.address}:{args.port}")
 
 
