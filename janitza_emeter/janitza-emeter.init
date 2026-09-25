@@ -1,0 +1,56 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          janitza-emeter
+# Required-Start:    $remote_fs $network $syslog
+# Required-Stop:     $remote_fs $network $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Janitza UMG to SMA Energy Meter bridge
+### END INIT INFO
+
+set -e
+
+NAME=janitza-emeter
+USER=administrator
+ROOT=/home/administrator/pysmaemeter
+DAEMON=/usr/bin/python3
+DAEMON_ARGS="$ROOT/janitza_emeter/janitza_emeter.py"
+PIDFILE=/run/$NAME.pid
+
+. /lib/lsb/init-functions
+
+start_it() {
+    start-stop-daemon --start --background --make-pidfile --pidfile "$PIDFILE" \
+        --chuid "$USER" --chdir "$ROOT" --exec "$DAEMON" -- $DAEMON_ARGS
+}
+
+stop_it() {
+    start-stop-daemon --stop --pidfile "$PIDFILE" --retry 5 --oknodo
+    rm -f "$PIDFILE"
+}
+
+case "$1" in
+    start)
+        log_daemon_msg "Starting $NAME"
+        start_it
+        log_end_msg $?
+        ;;
+    stop)
+        log_daemon_msg "Stopping $NAME"
+        stop_it
+        log_end_msg $?
+        ;;
+    restart|force-reload)
+        "$0" stop
+        "$0" start
+        ;;
+    status)
+        status_of_proc -p "$PIDFILE" "$DAEMON" "$NAME"
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+
+exit 0

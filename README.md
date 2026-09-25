@@ -107,6 +107,14 @@ Run this on a host that can reach the UMG on TCP/502 **and** that shares L2 mult
 python3 janitza_emeter/janitza_emeter.py
 ```
 
+On the Data Manager host, install a boot service (needs root once):
+
+```bash
+sudo ./janitza_emeter/install-service.sh
+```
+
+That installs `janitza-emeter.service` (systemd) or `/etc/init.d/janitza-emeter`. Logs: `journalctl -u janitza-emeter -f`.
+
 It reads signed power and lifetime import/export energy from the UMG (holding registers `19020`–`19076`) and emits a bidirectional SMA Energy Meter telegram. Missed reads repeat the last snapshot for `scheduler.hold_ticks` seconds, then go silent. Set `emeter.invert_direction` if CT orientation is reversed.
 
 ## Configuration
